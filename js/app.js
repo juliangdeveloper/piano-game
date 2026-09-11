@@ -73,7 +73,8 @@
     elCents.style.left = pct + '%';
     var cl = Math.max(0, Math.min(1, clarity));
     elClarity.style.width = (cl * 100) + '%';
-    elFreq.textContent = freq != null ? freq.toFixed(1) + ' Hz' : '';
+    // v1.3.1: la línea de Hz es telemetría (processAudio la actualiza cada frame
+    // con Hz+claridad). Solo la limpiamos al detener/reset, no aquí.
   }
 
   function renderLog() {
@@ -119,6 +120,14 @@
     var res = window.Pitch.detectPitch(buf, ctx.sampleRate, {
       clarityThreshold: CLARITY_THRESHOLD
     });
+
+    // Telemetría v1.3.1: el detector SIEMPRE mide → la línea de Hz muestra la
+    // medición cruda (Hz + claridad %) incluso cuando no cruza el umbral.
+    if (res.freq != null) {
+      elFreq.textContent = res.freq.toFixed(1) + ' Hz · claridad ' + Math.round(res.clarity * 100) + '%';
+    } else {
+      elFreq.textContent = '';
+    }
 
     var note = null;
     if (res.clarity >= CLARITY_THRESHOLD && res.freq != null) {
