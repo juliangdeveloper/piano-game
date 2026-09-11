@@ -11,6 +11,8 @@ Detector monofónico de notas de piano vía micrófono. Página estática para G
 - **R5**: iOS Safari: AudioContext creado/resumido dentro del tap; badge visible si el contexto queda suspendido; tap en cualquier parte lo reanuda.
 - **R6**: A4 = 440 Hz fijo (const `A4=440`, sin dial en v1).
 - **R7**: Log de últimas 8 notas estables: se agrega entrada cuando la nota estable CAMBIA; "—" y mic-off no agregan ni borran.
+- **R8**: Cadena de audio: source → BiquadFilter highpass 60Hz (Q 0.707) → BiquadFilter lowpass 4kHz (Q 0.707) → Gain ×4 fija → AnalyserNode. Sin AGC (`autoGainControl: false`): ganancia determinista, sin pumping.
+- **R10**: Hold: la nota estable sobrevive gaps de ≤15 frames (`HOLD_FRAMES=15`, ~500ms) antes de mostrar "—". La misma nota tras gap corto NO se re-loguea; tras pausa larga (> hold) SÍ. Implementado en `js/hold.js` (pura, TDD).
 
 ## Reparto de archivos (partición estricta entre agentes)
 
