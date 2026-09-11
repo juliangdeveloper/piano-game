@@ -33,8 +33,9 @@
   var running = false;
 
   var stableNote = null;      // nota estable actual: {name, octave, cents, midi}
-  var candidate = null;       // nota candidata: clave "name+octave"
-  var candidateCount = 0;     // contador por nota (R4)
+  var holdState = null;       // máquina de estados R4+R10 (window.Hold)
+  var lastFreq = null;        // última medición real (para render durante hold)
+  var lastClarity = 0;
   var logEntries = [];        // últimas 8 notas estables (R7)
 
   // ---- Utilidades ----
@@ -94,9 +95,10 @@
   }
 
   function resetDetection() {
+    holdState = window.Hold.createState();
     stableNote = null;
-    candidate = null;
-    candidateCount = 0;
+    lastFreq = null;
+    lastClarity = 0;
     renderOff();
     elFreq.textContent = '';
     // R3/R7: fuera de rango NO borra el log; aquí tampoco.
@@ -110,37 +112,28 @@
       clarityThreshold: CLARITY_THRESHOLD
     });
 
+    var note = null;
     if (res.clarity >= CLARITY_THRESHOLD && res.freq != null) {
-      var note = window.Pitch.noteFromFreq(res.freq, A4);
-      var inRange = note != null && note.midi >= MIDI_MIN && note.midi <= MIDI_MAX;
-      if (inRange) {
-        var key = note.name + note.octave;
-        if (candidate === key) {
-          candidateCount++;
-        } else {
-          candidate = key;
-          candidateCount = 1;
-        }
-        // R4: solo tras STABLE_FRAMES consecutivos
-        if (candidateCount >= STABLE_FRAMES) {
-          var changed = !stableNote || stableNote.name !== note.name || stableNote.octave !== note.octave;
-          stableNote = note;
-          renderNote(note, res.clarity, res.freq);
-          if (changed) {
-            pushLog(note); // R7: solo cuando la nota estable CAMBIA
-          }
-        }
-        // mientras tanto se mantiene la nota estable anterior (R4)
-        return;
+      var cand = window.Pitch.noteFromFreq(res.freq, A4);
+      // R3: fuera de rango C2–C7 → tratado como frame sin nota (log intacto)
+      if (cand != null && cand.midi >= MIDI_MIN && cand.midi <= MIDI_MAX) {
+        note = cand;
+        lastFreq = res.freq;
+        lastClarity = res.clarity;
       }
-      // R3: fuera de rango → '—', sin borrar el log
     }
 
-    // Sin nota válida: el candidato se descuenta; display '—' pero log intacto
-    candidate = null;
-    candidateCount = 0;
-    stableNote = null;
-    renderOff();
+    // R4+R10: delegar estabilidad/hold a la máquina pura (testeada en Node)
+    var out = window.Hold.update(note, holdState);
+    stableNote = out.display;
+    if (stableNote) {
+      renderNote(stableNote, lastClarity, lastFreq);
+      if (out.changed) {
+        pushLog(stableNote); // R7: solo cuando la nota estable CAMBIA
+      }
+    } else {
+      renderOff();
+    }
   }
 
   // ---- Loop rAF con skip (cada 2 frames) ----
@@ -230,8 +223,9 @@
     buf = new Float32Array(analyser.fftSize);
 
     frameCount = 0;
-    candidate = null;
-    candidateCount = 0;
+    holdState = window.Hold.createState();
+    lastFreq = null;
+    lastClarity = 0;
     stableNote = null;
 
     elBtn.textContent = 'Parar';
