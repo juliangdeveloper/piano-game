@@ -1,0 +1,80 @@
+# piano-game — SPEC v1
+
+Detector monofónico de notas de piano vía micrófono. Página estática para GitHub Pages. Sin dependencias externas, sin build, 100% client-side.
+
+## Reglas de negocio
+
+- **R1**: El micrófono solo se activa tras gesto del usuario (botón "Escuchar"). Antes del gesto no hay audio ni red. El audio nunca sale del dispositivo: cero fetch/XHR en runtime.
+- **R2**: Monofónico: se detecta UNA nota dominante. Si claridad < 0.90 (`CLARITY_THRESHOLD`) → display "—".
+- **R3**: Salida = nota + octava + cents (±50) + frecuencia Hz. Rango C2 (65.41 Hz) – C7 (2093.0 Hz). Fuera de rango → "—" (pero NO borra el log).
+- **R4**: Anti-parpadeo: nota se muestra solo tras 3 frames consecutivos con la misma nota (`STABLE_FRAMES=3`). Mientras tanto se mantiene la nota estable anterior.
+- **R5**: iOS Safari: AudioContext creado/resumido dentro del tap; badge visible si el contexto queda suspendido; tap en cualquier parte lo reanuda.
+- **R6**: A4 = 440 Hz fijo (const `A4=440`, sin dial en v1).
+- **R7**: Log de últimas 8 notas estables: se agrega entrada cuando la nota estable CAMBIA; "—" y mic-off no agregan ni borran.
+
+## Reparto de archivos (partición estricta entre agentes)
+
+- `index.html` — UI móvil-first (390px), sin librerías → **Agente B**
+- `js/app.js` — mic + AudioContext + AnalyserNode + loop de render → **Agente B**
+- `js/pitch.js` — lógica pura, sin DOM, UMD (`module.exports` + `window.Pitch`) → **Agente A**
+- `test/pitch.test.js` — tests Node (assert nativo, sin deps) contra buffers sintéticos → **Agente A**
+- `package.json`, `README.md`, `.gitignore`, `SPEC.md` → orquestador (ya existen, NO modificar)
+
+Los agentes NO ejecutan git (init/commit/push lo hace el orquestador). NO usar npm install (no hay dependencias).
+
+## Contrato de `js/pitch.js`
+
+```js
+// UMD: module.exports = Pitch (Node) y window.Pitch (browser)
+Pitch.detectPitch(buffer, sampleRate, opts) -> {freq: number|null, clarity: number}
+//   buffer: Float32Array; opts.clarityThreshold default 0.90
+//   clarity ∈ [0,1]; freq=null si claridad < threshold o buffer inválido (< 2*maxLag muestras)
+Pitch.noteFromFreq(freq, a4=440) -> {name, octave, cents, midi} | null
+//   name ∈ ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
+//   midi redondeado al semitono más cercano; cents = desvío redondeado ±50
+Pitch.hzForNote(name, octave, a4=440) -> number
+```
+
+`noteFromFreq` NO chequea el rango C2–C7 (eso lo hace app.js con midi ∈ [36,96]).
+
+## Algoritmo (YIN)
+
+- Ventana: 4096 muestras (app usa `analyser.fftSize=4096`), `maxLag=760` (cubre C2 a 48 kHz), `tauMin=2`.
+- Pasos estándar: función de diferencia d(τ) → diferencia media normalizada acumulativa d'(τ) → primer τ con d'(τ) < 0.15 (si no hay, argmin) → refinamiento parabólico.
+- `claridad = 1 - d'(τ)` en el τ elegido.
+
+## UI (index.html)
+
+- Fondo oscuro, tipografía grande para la nota: formato `A4 · La4` (nomenclatura anglosajona + latina: Do Do# Re Re# Mi Fa Fa# Sol Sol# La La# Si).
+- Elementos con id: `btnToggle` (texto "Escuchar"/"Parar"), `noteDisplay`, `centsBar` (barra horizontal −50..+50 con marcador), `clarityBar` (0..1), `freqText`, `noteLog` (lista, últimas 8), `badgeSuspended` (oculto por defecto, texto "Audio suspendido — toca para reanudar"), `hint` ("Toca una nota de piano cerca del micrófono").
+- Meta viewport + safe-area; sin scroll; sin recursos externos (ninguna fuente/CDN).
+
+## Loop (app.js)
+
+- `rAF` con skip: procesa cada 2 frames (~30 Hz). `analyser.getFloatTimeDomainData(buf)` → `Pitch.detectPitch(buf, ctx.sampleRate)`.
+- Estabilidad: contador por nota; al llegar a `STABLE_FRAMES` se vuelve nota estable y se actualiza display + log.
+- Stop: `stream.getTracks().forEach(t => t.stop())`, cancelar loop, reset de display ("—") SIN borrar el log.
+- R5: en tap general, si `ctx.state === 'suspended'` → `ctx.resume()`; badge visible mientras esté suspendido.
+
+## Tests (TDD: escribirlos primero, verlos fallar, luego implementar)
+
+Usar sampleRate 48000 y 44100 según el caso; buffers Float32Array de 4096.
+
+1. Seno 440 Hz → freq 440±1.5, claridad > 0.9; `noteFromFreq` → A4, cents 0±2
+2. Seno 261.6256 Hz @44100 → C4 (freq ±1.5)
+3. Seno 82.4069 Hz → E2 (freq ±2)
+4. Seno 2093.0 Hz → C7 (freq ±3)
+5. Señal tipo piano 220 Hz (220 + 0.5·440 + 0.25·660 + 0.12·880) → A3 (freq ±2), claridad > 0.9
+6. Buffer de ceros → freq null, claridad ≤ 0.1
+7. Ruido blanco (LCG seed fija, determinista) → freq null
+8. Buffer de 100 muestras → freq null sin lanzar excepción
+9. `hzForNote('A',4) === 440`; `hzForNote('C',4,442)` ≈ 263.74 (±0.05)
+10. Roundtrip: para cada semitono C2..C7, `hzForNote → noteFromFreq` devuelve mismo name/octave y |cents| ≤ 1
+11. `noteFromFreq(444.5)` → A4 con cents ≈ +18 (±5)
+
+## Criterios de aceptación
+
+- `npm test` verde (exit 0), sin dependencias instaladas.
+- `node --check js/app.js` y `node --check js/pitch.js` sin errores.
+- index.html abre sin errores de consola antes del gesto (verificación del orquestador en browser).
+- Sin llamadas de red en runtime (grep de fetch/XHR vacío).
