@@ -217,9 +217,26 @@
   function beginAudio(mediaStream) {
     stream = mediaStream;
     var source = ctx.createMediaStreamSource(stream);
+    // R8: cadena de acondicionamiento — HP 60Hz → LP 4kHz → Gain ×4 fija → Analyser.
+    // La banda de paso corta rumble/hum (50/60Hz) e hiss; la ganancia es fija
+    // (determinista, sin AGC/pumping). YIN es invariante a amplitud: la ganancia
+    // solo eleva el nivel crudo que ve el gate futuro y la visual.
+    var hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 60;
+    hp.Q.value = 0.707;
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 4000;
+    lp.Q.value = 0.707;
+    var preamp = ctx.createGain();
+    preamp.gain.value = 4.0;
     analyser = ctx.createAnalyser();
     analyser.fftSize = 4096;
-    source.connect(analyser);
+    source.connect(hp);
+    hp.connect(lp);
+    lp.connect(preamp);
+    preamp.connect(analyser);
     buf = new Float32Array(analyser.fftSize);
 
     frameCount = 0;
