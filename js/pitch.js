@@ -104,8 +104,9 @@
     if (clarity < 0) clarity = 0;
     if (clarity > 1) clarity = 1;
 
-    if (clarity < clarityThreshold) return { freq: null, clarity: clarity };
-
+    // v1.3.1: el detector SIEMPRE reporta la freq encontrada — la decisión de
+    // mostrarla es política del caller (umbral clarityThreshold). El threshold
+    // sigue existiendo como datos (app.js lo usa), pero ya no borra la medición.
     return { freq: sampleRate / refinedTau, clarity: clarity };
   }
 

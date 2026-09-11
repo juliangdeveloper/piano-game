@@ -99,9 +99,9 @@ test('6: buffer de ceros → freq null, claridad ≤ 0.1', () => {
   assert.ok(clarity <= 0.1, `claridad=${clarity}, esperaba ≤ 0.1`);
 });
 
-test('7: ruido blanco (LCG seed fija) → freq null', () => {
-  const { freq } = Pitch.detectPitch(whiteNoise(12345), 48000);
-  assert.strictEqual(freq, null);
+test('7: ruido blanco (LCG seed fija) → sin periodicidad: claridad baja (v1.3.1: freq se reporta, el gate es política de app)', () => {
+  const { clarity } = Pitch.detectPitch(whiteNoise(12345), 48000);
+  assert.ok(clarity < 0.5, `claridad=${clarity}, ruido debe quedar muy bajo el umbral 0.90`);
 });
 
 test('8: buffer de 100 muestras → freq null sin lanzar excepción', () => {
