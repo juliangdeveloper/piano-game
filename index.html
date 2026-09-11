@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0b0d10">
+  <title>piano-game — Detector de notas</title>
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --fg: #e8eaf0;
+      --dim: #8a93a3;
+      --accent: #4ade80;
+      --accent-warm: #f59e0b;
+      --panel: #14181f;
+      --line: #232a35;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-left: env(safe-area-inset-left, 0px);
+      --safe-right: env(safe-area-inset-right, 0px);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      max-width: 390px;
+      margin: 0 auto;
+      height: 100vh;
+      height: 100dvh;
+      padding-top: var(--safe-top);
+      padding-bottom: var(--safe-bottom);
+      padding-left: var(--safe-left);
+      padding-right: var(--safe-right);
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    #badgeSuspended {
+      display: none;
+      background: var(--accent-warm);
+      color: #1a1206;
+      font-size: 13px;
+      font-weight: 600;
+      text-align: center;
+      padding: 8px 12px;
+    }
+    #badgeSuspended.visible { display: block; }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 16px;
+      min-height: 0;
+    }
+
+    #noteDisplay {
+      font-size: clamp(72px, 24vw, 112px);
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -2px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+    #noteDisplay.off { color: #3a4250; }
+
+    .meter {
+      width: 100%;
+    }
+    .meter-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--dim);
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .track {
+      position: relative;
+      height: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    #centsBar {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 4px;
+      background: var(--accent);
+      border-radius: 2px;
+      transform: translateX(-50%);
+      transition: left 80ms linear;
+    }
+    #centsBar::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: -3px;
+      bottom: -3px;
+      width: 1px;
+      background: var(--line);
+      transform: translateX(-50%);
+    }
+    .cents-track { height: 14px; }
+    .cents-track::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: -2px;
+      bottom: -2px;
+      width: 1px;
+      background: var(--line);
+      transform: translateX(-50%);
+    }
+    #clarityBar {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 80ms linear;
+    }
+    .cents-track #centsBar {
+      height: 100%;
+      top: 0;
+      bottom: 0;
+    }
+
+    #freqText {
+      font-size: 15px;
+      color: var(--dim);
+      font-variant-numeric: tabular-nums;
+      min-height: 20px;
+    }
+
+    #hint {
+      font-size: 13px;
+      color: var(--dim);
+      text-align: center;
+    }
+
+    #noteLog {
+      list-style: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: center;
+      width: 100%;
+      min-height: 34px;
+      align-content: center;
+    }
+    #noteLog li {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 14px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    footer {
+      padding: 12px 16px calc(12px + var(--safe-bottom));
+      display: flex;
+      justify-content: center;
+    }
+
+    #btnToggle {
+      appearance: none;
+      border: none;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #05130a;
+      font-size: 18px;
+      font-weight: 700;
+      padding: 16px 48px;
+      min-width: 200px;
+      cursor: pointer;
+    }
+    #btnToggle:active { opacity: 0.85; }
+    #btnToggle.listening {
+      background: #ef4444;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div id="badgeSuspended">Audio suspendido — toca para reanudar</div>
+
+  <main>
+    <div id="noteDisplay" class="off">—</div>
+
+    <div class="meter">
+      <div class="meter-label"><span>Cents</span><span>−50 · +50</span></div>
+      <div class="track cents-track">
+        <div id="centsBar"></div>
+      </div>
+    </div>
+
+    <div class="meter">
+      <div class="meter-label"><span>Claridad</span></div>
+      <div class="track">
+        <div id="clarityBar"></div>
+      </div>
+    </div>
+
+    <div id="freqText"></div>
+    <div id="hint">Toca una nota de piano cerca del micrófono</div>
+
+    <ul id="noteLog"></ul>
+  </main>
+
+  <footer>
+    <button id="btnToggle" type="button">Escuchar</button>
+  </footer>
+
+  <script src="js/pitch.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
