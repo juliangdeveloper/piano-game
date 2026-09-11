@@ -59,6 +59,62 @@
     }
     #badgeSuspended.visible { display: block; }
 
+    header {
+      display: flex;
+      justify-content: flex-end;
+      padding: calc(8px + var(--safe-top)) 12px 0;
+    }
+    #btnSettings {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--dim);
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 999px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+
+    #settings {
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin: 8px 16px 0;
+      padding: 10px 14px;
+    }
+    #settings.visible { display: flex; }
+    .settings-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--dim);
+      margin-bottom: 6px;
+    }
+    #settings label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 15px;
+      padding: 8px 2px;
+      border-bottom: 1px solid var(--line);
+    }
+    #settings label:last-of-type { border-bottom: none; }
+    #settings input[type="radio"] {
+      accent-color: var(--accent);
+      width: 18px;
+      height: 18px;
+    }
+    #midiStatus {
+      font-size: 12px;
+      color: var(--accent);
+      min-height: 14px;
+      padding-top: 4px;
+    }
+
     main {
       flex: 1;
       display: flex;
@@ -213,6 +269,18 @@
 </head>
 <body>
   <div id="badgeSuspended">Audio suspendido — toca para reanudar</div>
+
+  <header>
+    <button id="btnSettings" type="button" aria-label="Ajustes">⚙ mic</button>
+  </header>
+
+  <section id="settings">
+    <div class="settings-title">Fuente de entrada</div>
+    <label><input type="radio" name="source" value="mic"> 🎤 Micrófono</label>
+    <label><input type="radio" name="source" value="midi"> 🎹 MIDI (USB / Bluetooth)</label>
+    <label><input type="radio" name="source" value="line"> 🔌 Línea (cable)</label>
+    <div id="midiStatus"></div>
+  </section>
 
   <main>
     <div id="noteDisplay" class="off">—</div>

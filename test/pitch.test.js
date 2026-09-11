@@ -145,3 +145,32 @@ test('11: noteFromFreq(444.5) → A4, cents ≈ +18 (±5)', () => {
   assert.strictEqual(note.octave, 4);
   assert.ok(Math.abs(note.cents - 18) <= 5, `cents=${note.cents}, esperaba ≈18±5`);
 });
+
+test('12: noteFromMidi — C4=60, A4=69, extremos 0/127, fuera de rango → null (R13)', () => {
+  const c4 = Pitch.noteFromMidi(60);
+  assert.deepStrictEqual(
+    { name: c4.name, octave: c4.octave, cents: c4.cents, midi: c4.midi },
+    { name: 'C', octave: 4, cents: 0, midi: 60 }
+  );
+  const a4 = Pitch.noteFromMidi(69);
+  assert.deepStrictEqual(
+    { name: a4.name, octave: a4.octave, cents: a4.cents, midi: a4.midi },
+    { name: 'A', octave: 4, cents: 0, midi: 69 }
+  );
+  const low = Pitch.noteFromMidi(0);
+  assert.deepStrictEqual({ name: low.name, octave: low.octave }, { name: 'C', octave: -1 });
+  const hi = Pitch.noteFromMidi(127);
+  assert.deepStrictEqual({ name: hi.name, octave: hi.octave }, { name: 'G', octave: 9 });
+  assert.strictEqual(Pitch.noteFromMidi(128), null, '128 fuera de rango');
+  assert.strictEqual(Pitch.noteFromMidi(-1), null, '-1 fuera de rango');
+  assert.strictEqual(Pitch.noteFromMidi('60'), null, 'string no es midi válido');
+});
+
+test('13: roundtrip noteFromMidi ↔ noteFromFreq en todo el rango MIDI', () => {
+  for (let m = 0; m <= 127; m++) {
+    const byMidi = Pitch.noteFromMidi(m);
+    const hz = Pitch.hzForNote(byMidi.name, byMidi.octave);
+    const byFreq = Pitch.noteFromFreq(hz);
+    assert.strictEqual(byFreq.midi, m, `midi ${m}: ${byMidi.name}${byMidi.octave} → ${hz}Hz → volvió ${byFreq.midi}`);
+  }
+});

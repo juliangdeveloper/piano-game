@@ -13,6 +13,9 @@ Detector monofónico de notas de piano vía micrófono. Página estática para G
 - **R7**: Log de últimas 8 notas estables: se agrega entrada cuando la nota estable CAMBIA; "—" y mic-off no agregan ni borran.
 - **R8**: Cadena de audio: source → BiquadFilter highpass 60Hz (Q 0.707) → BiquadFilter lowpass 4kHz (Q 0.707) → Gain ×4 fija → AnalyserNode. Sin AGC (`autoGainControl: false`): ganancia determinista, sin pumping.
 - **R10**: Hold: la nota estable sobrevive gaps de ≤15 frames (`HOLD_FRAMES=15`, ~500ms) antes de mostrar "—". La misma nota tras gap corto NO se re-loguea; tras pausa larga (> hold) SÍ. Implementado en `js/hold.js` (pura, TDD).
+- **R11**: Tres fuentes de entrada seleccionables: `mic` (cadena R8, default), `midi` (Web MIDI: note-on → display inmediato vía `Hold.midiUpdate`, note-off → display "—" al instante, sin YIN/hold/contador; status line `⚙ midi` visible en `midiStatus`), `line` (getUserMedia con preamp ×1 en vez de ×4). Si Web MIDI no está disponible o no hay dispositivo → aviso en hint, sin crash.
+- **R12**: La fuente elegida persiste en `localStorage` (`piano-game.source`). El botón ⚙ (abre/cierra el panel) solo es visible cuando el detector está parado.
+- **R13**: `Pitch.noteFromMidi(m)` pura en `pitch.js`: número entero 0–127 → {name, octave, cents:0, midi}; fuera de rango o no-entero → null. TDD (C4=60, A4=69, extremos, roundtrip 0–127).
 
 ## Reparto de archivos (partición estricta entre agentes)
 
