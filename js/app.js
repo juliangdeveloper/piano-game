@@ -11,6 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
+  var VERSION = 'v1.2.0';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
 
   // ---- DOM ----
@@ -279,6 +280,7 @@
   });
 
   // Estado inicial
+  document.getElementById('version').textContent = VERSION;
   renderOff();
   renderLog();
 })();
