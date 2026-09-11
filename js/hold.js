@@ -77,8 +77,28 @@
     return { display: null, changed: false };
   }
 
+  /**
+   * Modo MIDI (R11): eventos discretos — sin contador R4 ni hold.
+   * note-on → display inmediato; note-off (null) → display null inmediato.
+   * Cada pulsación es un evento: misma nota tras note-off SÍ re-loguea.
+   */
+  function midiUpdate(state, note) {
+    if (note) {
+      var prev = state.stable;
+      var changed = !prev || prev.name !== note.name || prev.octave !== note.octave;
+      state.stable = note;
+      return { display: note, changed: changed };
+    }
+    state.stable = null;
+    state.candidateKey = null;
+    state.candidateCount = 0;
+    state.holdCount = 0;
+    return { display: null, changed: false };
+  }
+
   return {
     update: update,
+    midiUpdate: midiUpdate,
     createState: createState,
     STABLE_FRAMES: STABLE_FRAMES,
     HOLD_FRAMES: HOLD_FRAMES

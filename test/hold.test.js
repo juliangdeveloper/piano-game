@@ -91,3 +91,27 @@ test('T6: transición de nota loguea exactamente una vez', () => {
   const changedCount = seq.filter((x) => x.changed).length;
   assert.strictEqual(changedCount, 2, 'A4 y B4: un changed cada una');
 });
+
+// ---- midiUpdate (R11): eventos discretos, sin contador R4 ni hold ----
+
+test('T7: midiUpdate note-on muestra al instante y loguea cambios', () => {
+  const s = Hold.createState();
+  const r1 = Hold.midiUpdate(s, N('C', 4));
+  assert.strictEqual(r1.display.name, 'C', 'note-on displays inmediato (sin esperar 3 frames)');
+  assert.strictEqual(r1.changed, true, 'primera nota loguea');
+  const r2 = Hold.midiUpdate(s, N('C', 4));
+  assert.strictEqual(r2.changed, false, 'misma tecla sostenida no re-loguea');
+  const r3 = Hold.midiUpdate(s, N('E', 4));
+  assert.strictEqual(r3.display.name, 'E');
+  assert.strictEqual(r3.changed, true, 'cambio de tecla loguea');
+});
+
+test('T8: midiUpdate note-off cae al instante y la siguiente nota re-loguea', () => {
+  const s = Hold.createState();
+  Hold.midiUpdate(s, N('C', 4));
+  const off = Hold.midiUpdate(s, null);
+  assert.strictEqual(off.display, null, 'note-off → display null inmediato (dial: al instante)');
+  assert.strictEqual(off.changed, false, 'note-off no loguea');
+  const again = Hold.midiUpdate(s, N('C', 4));
+  assert.strictEqual(again.changed, true, 'misma nota tras note-off SÍ loguea (nueva pulsación)');
+});

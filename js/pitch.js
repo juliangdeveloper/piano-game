@@ -137,10 +137,23 @@
     return a4 * Math.pow(2, (midi - 69) / 12);
   }
 
+  // Número MIDI → {name, octave, cents:0, midi}. Fuera de 0–127 o no-entero → null.
+  function noteFromMidi(midi) {
+    if (typeof midi !== 'number' || !isFinite(midi) || midi % 1 !== 0) return null;
+    if (midi < 0 || midi > 127) return null;
+    return {
+      name: NAMES[midi % 12],
+      octave: Math.floor(midi / 12) - 1,
+      cents: 0,
+      midi: midi
+    };
+  }
+
   return {
     detectPitch: detectPitch,
     noteFromFreq: noteFromFreq,
     hzForNote: hzForNote,
+    noteFromMidi: noteFromMidi,
     // constantes expuestas por conveniencia (no parte del contrato estricto)
     WINDOW_SIZE: WINDOW_SIZE,
     MAX_LAG: MAX_LAG,

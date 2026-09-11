@@ -11,8 +11,9 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.2.0';
+  var VERSION = 'v1.3.0';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
+  var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
 
   // ---- DOM ----
   var elBtn = document.getElementById('btnToggle');
@@ -23,6 +24,12 @@
   var elLog = document.getElementById('noteLog');
   var elBadge = document.getElementById('badgeSuspended');
   var elHint = document.getElementById('hint');
+  var elSettings = document.getElementById('settings');
+  var elBtnSettings = document.getElementById('btnSettings');
+  var elMidiStatus = document.getElementById('midiStatus');
+  var sourceMode = 'mic'; // R11: 'mic' | 'midi' | 'line'
+  var midiAccess = null;  // R11: acceso Web MIDI (solo modo midi)
+  var midiInputName = '';
 
   // ---- Estado ----
   var ctx = null;
@@ -160,6 +167,17 @@
       cancelAnimationFrame(rafId);
       rafId = 0;
     }
+    // R11: limpiar MIDI (handlers y acceso)
+    if (midiAccess) {
+      midiAccess.onstatechange = null;
+      var inputs = midiAccess.inputs.values();
+      for (var it = inputs.next(); !it.done; it = inputs.next()) {
+        it.value.onmidimessage = null;
+      }
+      midiAccess = null;
+    }
+    midiInputName = '';
+    renderMidiStatus();
     if (stream) {
       stream.getTracks().forEach(function (t) { t.stop(); });
       stream = null;
@@ -176,11 +194,18 @@
     resetDetection(); // display '—' SIN borrar el log (R7)
     elBtn.textContent = 'Escuchar';
     elBtn.classList.remove('listening');
-    elHint.textContent = 'Toca una nota de piano cerca del micrófono';
+    elHint.textContent = (sourceMode === 'midi')
+      ? 'Conectá el piano por USB o Bluetooth MIDI y tocá Escuchar'
+      : 'Toca una nota de piano cerca del micrófono';
+    renderSettingsVisibility();
     updateBadge();
   }
 
   function start() {
+    if (sourceMode === 'midi') {
+      startMidi();
+      return;
+    }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       elHint.textContent = 'Micrófono no disponible en este navegador';
       return;
@@ -212,6 +237,89 @@
     });
   }
 
+  // ---- R11: modo MIDI — eventos discretos, sin mic ni YIN ----
+
+  function startMidi() {
+    if (!navigator.requestMIDIAccess) {
+      stop();
+      elHint.textContent = 'Web MIDI no soportado en este navegador';
+      return;
+    }
+    navigator.requestMIDIAccess({ sysex: false }).then(function (access) {
+      if (!running) return; // se paró mientras llegaba el permiso
+      midiAccess = access;
+      var input = pickMidiInput(access);
+      if (!input) {
+        stop();
+        elHint.textContent = 'Sin entrada MIDI — conectá el piano por USB o Bluetooth MIDI';
+        return;
+      }
+      midiInputName = input.name || 'MIDI';
+      input.onmidimessage = onMidiMessage;
+      // escuchar conexiones/desconexiones en caliente
+      access.onstatechange = function () {
+        if (!running || sourceMode !== 'midi') return;
+        var live = pickMidiInput(access);
+        if (live) {
+          live.onmidimessage = onMidiMessage;
+          midiInputName = live.name || 'MIDI';
+        }
+        renderMidiStatus();
+      };
+      elBtn.textContent = 'Parar';
+      elBtn.classList.add('listening');
+      elHint.textContent = '';
+      renderMidiStatus();
+    }).catch(function (err) {
+      stop();
+      elHint.textContent = 'Acceso MIDI denegado: ' + (err && err.name ? err.name : 'error');
+    });
+  }
+
+  function pickMidiInput(access) {
+    var first = null;
+    var inputs = access.inputs.values();
+    for (var it = inputs.next(); !it.done; it = inputs.next()) {
+      var inp = it.value;
+      if (inp.type === 'input') {
+        // preferir uno que ya esté enviando datos (connection === 'open')
+        if (inp.connection === 'open') return inp;
+        if (!first) first = inp;
+      }
+    }
+    return first;
+  }
+
+  function onMidiMessage(e) {
+    // R11: solo note-on/note-off del canal 0-15; velocity 0 = note-off
+    var status = e.data[0] & 0xf0;
+    var midiNum = e.data[1];
+    var velocity = e.data[2];
+    if (midiNum < MIDI_MIN || midiNum > MIDI_MAX) return; // R3 fuera de rango
+    var note = window.Pitch.noteFromMidi(midiNum);
+    if (!note) return;
+    if (status === 0x90 && velocity > 0) {
+      var out = window.Hold.midiUpdate(holdState, note);
+      if (out.display) {
+        lastFreq = null; // MIDI no da Hz medidos; mostramos la referencia teórica
+        lastClarity = 1;
+        renderNote(out.display, 1, window.Pitch.hzForNote(out.display.name, out.display.octave, A4));
+      }
+      if (out.changed) pushLog(out.display);
+    } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
+      var offOut = window.Hold.midiUpdate(holdState, null); // dial: cae al instante
+      if (!offOut.display) renderOff();
+    }
+  }
+
+  function renderMidiStatus() {
+    if (sourceMode === 'midi' && running) {
+      elMidiStatus.textContent = 'MIDI: ' + (midiInputName || 'buscando dispositivo…');
+    } else {
+      elMidiStatus.textContent = '';
+    }
+  }
+
   // ---- Arranque real tras tener stream ----
   // (separado para mantener start() plano; se invoca desde el .then)
 
@@ -231,7 +339,8 @@
     lp.frequency.value = 4000;
     lp.Q.value = 0.707;
     var preamp = ctx.createGain();
-    preamp.gain.value = 4.0;
+    // R8/R11: mic ×4 (señal de micrófono débil); línea ×1 (la señal de cable llega fuerte)
+    preamp.gain.value = (sourceMode === 'line') ? 1.0 : 4.0;
     analyser = ctx.createAnalyser();
     analyser.fftSize = 4096;
     source.connect(hp);
@@ -259,11 +368,53 @@
 
   // ---- Eventos ----
 
+  // R12: persistencia de fuente
+  function loadSource() {
+    try {
+      var saved = localStorage.getItem(LS_KEY);
+      if (saved === 'mic' || saved === 'midi' || saved === 'line') sourceMode = saved;
+    } catch (e) { /* localStorage bloqueado → default mic */ }
+  }
+
+  function saveSource() {
+    try { localStorage.setItem(LS_KEY, sourceMode); } catch (e) { /* noop */ }
+  }
+
+  function renderSettings() {
+    var radios = elSettings.querySelectorAll('input[name="source"]');
+    for (var i = 0; i < radios.length; i++) {
+      radios[i].checked = (radios[i].value === sourceMode);
+    }
+    elBtnSettings.textContent = (sourceMode === 'mic') ? '⚙ mic'
+      : (sourceMode === 'midi') ? '⚙ midi' : '⚙ línea';
+  }
+
+  // R12/dial 3: el ⚙ solo aparece cuando está parado
+  function renderSettingsVisibility() {
+    elBtnSettings.style.display = running ? 'none' : '';
+  }
+
+  elBtnSettings.addEventListener('click', function () {
+    var willShow = elSettings.classList.toggle('visible');
+    if (willShow) renderSettings();
+  });
+
+  elSettings.addEventListener('change', function (e) {
+    if (e.target && e.target.name === 'source') {
+      sourceMode = e.target.value;
+      saveSource();
+      renderSettings();
+      renderMidiStatus();
+    }
+  });
+
   elBtn.addEventListener('click', function () {
     if (running) {
       stop();
     } else {
       running = true;
+      renderSettingsVisibility();
+      resetDetection();
       start();
     }
   });
@@ -281,6 +432,10 @@
 
   // Estado inicial
   document.getElementById('version').textContent = VERSION;
+  loadSource();
+  renderSettings();
+  renderSettingsVisibility();
+  renderMidiStatus();
   renderOff();
   renderLog();
 })();
