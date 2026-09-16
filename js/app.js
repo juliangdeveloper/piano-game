@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.4.0';
+  var VERSION = 'v1.4.1';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -222,20 +222,16 @@
     elBtn.classList.remove('listening');
     elHint.textContent = (sourceMode === 'midi')
       ? 'Conecta el piano por USB o Bluetooth MIDI y toca Escuchar'
-      : (sourceMode === 'transcribe')
-      ? 'Toca "Escuchar" y toca notas: quedan todas en la lista'
-      : 'Toca una nota de piano cerca del micrófono';
+      : 'Toca notas: todas quedan en la lista, en orden';
     renderSettingsVisibility();
     updateBadge();
   }
 
   function start() {
+    // R14: la transcripción corre SIEMPRE sobre la entrada de mic (no es modo aparte);
+    // 'line' comparte el mismo pipeline con preamp ×1.
     if (sourceMode === 'midi') {
       startMidi();
-      return;
-    }
-    if (sourceMode === 'transcribe') {
-      startTranscribe();
       return;
     }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -262,7 +258,7 @@
         mediaStream.getTracks().forEach(function (t) { t.stop(); });
         return;
       }
-      beginAudio(mediaStream);
+      beginTranscribe(mediaStream); // R14: transcripción SIEMPRE sobre el mic
     }).catch(function (err) {
       stop();
       elHint.textContent = 'Permiso de micrófono denegado: ' + (err && err.name ? err.name : 'error');
@@ -354,31 +350,6 @@
 
   // ---- R14/R18: modo Transcripción — capturador (ring 60s) + procesador (ticker 200ms) ----
 
-  function startTranscribe() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      elHint.textContent = 'Micrófono no disponible en este navegador';
-      return;
-    }
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) {
-      elHint.textContent = 'Web Audio no soportado';
-      return;
-    }
-    ctx = new AC();
-    updateBadge();
-    navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-    }).then(function (mediaStream) {
-      if (!running) {
-        mediaStream.getTracks().forEach(function (t) { t.stop(); });
-        return;
-      }
-      beginTranscribe(mediaStream);
-    }).catch(function (err) {
-      stop();
-      elHint.textContent = 'Permiso de micrófono denegado: ' + (err && err.name ? err.name : 'error');
-    });
-  }
 
   function beginTranscribe(mediaStream) {
     stream = mediaStream;
@@ -423,6 +394,12 @@
 
     // R18: ticker — procesa el backlog completo desde txProcIdx
     txTimer = setInterval(tickTranscribe, TX_TICK_MS);
+
+    // iOS: el AudioContext arranca suspendido incluso con gesto — reanudar
+    // (sin esto el ScriptProcessor nunca dispara y el ring queda vacío)
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(updateBadge).catch(updateBadge);
+    }
 
     elBtn.textContent = 'Parar';
     elBtn.classList.add('listening');
@@ -514,59 +491,15 @@
     txEventCount = 0;
   }
 
-  // ---- Arranque real tras tener stream ----
-  // (separado para mantener start() plano; se invoca desde el .then)
-
-  function beginAudio(mediaStream) {
-    stream = mediaStream;
-    var source = ctx.createMediaStreamSource(stream);
-    // R8: cadena de acondicionamiento — HP 60Hz → LP 4kHz → Gain ×4 fija → Analyser.
-    // La banda de paso corta rumble/hum (50/60Hz) e hiss; la ganancia es fija
-    // (determinista, sin AGC/pumping). YIN es invariante a amplitud: la ganancia
-    // solo eleva el nivel crudo que ve el gate futuro y la visual.
-    var hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 60;
-    hp.Q.value = 0.707;
-    var lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = 4000;
-    lp.Q.value = 0.707;
-    var preamp = ctx.createGain();
-    // R8/R11: mic ×4 (señal de micrófono débil); línea ×1 (la señal de cable llega fuerte)
-    preamp.gain.value = (sourceMode === 'line') ? 1.0 : 4.0;
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 4096;
-    source.connect(hp);
-    hp.connect(lp);
-    lp.connect(preamp);
-    preamp.connect(analyser);
-    buf = new Float32Array(analyser.fftSize);
-
-    frameCount = 0;
-    holdState = window.Hold.createState();
-    lastFreq = null;
-    lastClarity = 0;
-    stableNote = null;
-
-    elBtn.textContent = 'Parar';
-    elBtn.classList.add('listening');
-    elHint.textContent = 'Escuchando… toca una nota de piano';
-
-    if (ctx.state === 'suspended') {
-      ctx.resume().then(updateBadge).catch(updateBadge);
-    }
-    updateBadge();
-    rafId = requestAnimationFrame(loop);
-  }
-
   // ---- Eventos ----
 
   // R12: persistencia de fuente
   function loadSource() {
     try {
       var saved = localStorage.getItem(LS_KEY);
-      if (saved === 'mic' || saved === 'midi' || saved === 'line' || saved === 'transcribe') sourceMode = saved;
+      // 'transcribe' existió como modo aparte en v1.4.0-dev: normalizar a mic
+      if (saved === 'transcribe') saved = 'mic';
+      if (saved === 'mic' || saved === 'midi' || saved === 'line') sourceMode = saved;
     } catch (e) { /* localStorage bloqueado → default mic */ }
   }
 
@@ -580,8 +513,7 @@
       radios[i].checked = (radios[i].value === sourceMode);
     }
     elBtnSettings.textContent = (sourceMode === 'mic') ? '⚙ mic'
-      : (sourceMode === 'midi') ? '⚙ midi'
-      : (sourceMode === 'transcribe') ? '⚙ transcripción' : '⚙ línea';
+      : (sourceMode === 'midi') ? '⚙ midi' : '⚙ línea';
   }
 
   // R12/dial 3: el ⚙ solo aparece cuando está parado
