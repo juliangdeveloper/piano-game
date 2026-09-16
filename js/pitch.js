@@ -150,11 +150,24 @@
     };
   }
 
+  /**
+   * Umbral de claridad adaptativo: los agudos (C5+, midi ≥72) salen más débiles
+   * del speaker del piano (rolloff físico) y su coherencia armónica real cae —
+   * con umbral estricto 0.90 E5+ quedaba bajo el corte. Relajado a 0.78 arriba.
+   */
+  function clarifyThresholdForMidi(midi, opts) {
+    var strict = 0.90, relaxed = 0.78;
+    if (opts && typeof opts.strict === 'number') strict = opts.strict;
+    if (opts && typeof opts.relaxed === 'number') relaxed = opts.relaxed;
+    return midi >= 72 ? relaxed : strict;
+  }
+
   return {
     detectPitch: detectPitch,
     noteFromFreq: noteFromFreq,
     hzForNote: hzForNote,
     noteFromMidi: noteFromMidi,
+    clarifyThresholdForMidi: clarifyThresholdForMidi,
     // constantes expuestas por conveniencia (no parte del contrato estricto)
     WINDOW_SIZE: WINDOW_SIZE,
     MAX_LAG: MAX_LAG,

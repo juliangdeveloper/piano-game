@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.5.2';
+  var VERSION = 'v1.6.0';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -38,17 +38,13 @@
   var midiAccess = null;  // R11: acceso Web MIDI (solo modo midi)
   var midiInputName = '';
   // R14: estado del modo transcripción
-  var txRing = null;      // Float32Array ring buffer (60s)
-  var txWriteIdx = 0;     // posición de escritura
-  var txWritten = 0;      // muestras totales escritas (absoluto)
-  var txProcIdx = 0;      // muestras procesadas (absoluto)
-  var txTimer = null;     // setInterval ticker
   var txEs = null;        // EventStream
   var txSessionStart = 0; // performance.now() al iniciar sesión
   var txLastNoteIdx = 0;  // último eventIdx mostrado en la lista
   var txGateOpen = false; // R19: estado del gate (histéresis)
+  var txLastRms = 0;      // RMS del frame anterior (score de re-ataque)
+  var txEventCount = 0;   // filas de la lista en la sesión
   var txPendingGroup = null; // R20: agrupación de notas con onset simultáneo
-  var txModel = null;        // R21: modelo Basic Pitch cargado
 
   // ---- Estado ----
   var ctx = null;
@@ -354,204 +350,110 @@
   // ---- R14/R18: modo Transcripción — capturador (ring 60s) + procesador (ticker 200ms) ----
 
 
-  function beginTranscribe(mediaStream) {
+function beginTranscribe(mediaStream) {
     stream = mediaStream;
     var source = ctx.createMediaStreamSource(stream);
-    // R8/R11: misma cadena de acondicionamiento del mic (HP 60 + LP 4k + ×4)
+    // R8: HP 60 → LP 4k → preamp ×4 (línea ×1) — acondicionamiento fijo sin AGC
     var hp = ctx.createBiquadFilter();
     hp.type = 'highpass'; hp.frequency.value = 60; hp.Q.value = 0.707;
     var lp = ctx.createBiquadFilter();
     lp.type = 'lowpass'; lp.frequency.value = 4000; lp.Q.value = 0.707;
     var preamp = ctx.createGain();
     preamp.gain.value = (sourceMode === 'line') ? 1.0 : 4.0;
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048; // 43ms @48k — resolución temporal para tiempo real
+    buf = new Float32Array(analyser.fftSize);
     source.connect(hp); hp.connect(lp); lp.connect(preamp);
-    txRing = new Float32Array(Math.ceil(ctx.sampleRate * TX_RING_SEC));
-    txWriteIdx = 0; txWritten = 0; txProcIdx = 0;
+    preamp.connect(analyser);
     txEs = window.EventStream.create();
-    window.EventStream.setHopMs(txEs, TX_HOP * 1000 / ctx.sampleRate);
+    window.EventStream.setHopMs(txEs, 2048 * 1000 / ctx.sampleRate);
     txSessionStart = performance.now();
-    txLastNoteIdx = 0;
     txEventCount = 0;
-    elLog.classList.add('chrono'); // R17: lista cronológica completa
+    elLog.classList.add('chrono');
     elLog.innerHTML = '';
     txPendingGroup = null;
+    txGateOpen = false;
+    txLastRms = 0;
 
-    // R14 capturador: AudioWorklet (stream contiguo real, iOS 14.5+).
-    analyser = null; // el rAF NO captura en este modo
-    // R21: cargar el modelo Basic Pitch (una vez por sesión, ~1MB cacheable)
-    if (!txModel) {
-      elHint.textContent = 'Cargando modelo de transcripción…';
-      tf.loadGraphModel('model/model.json').then(function (m) {
-        txModel = m;
-        elHint.textContent = 'Transcribiendo… toca notas (lista completa abajo)';
-      }).catch(function (err) {
-        elHint.textContent = 'No se pudo cargar el modelo: ' + (err && err.message ? err.message : 'error');
-      });
-    }
-    ctx.audioWorklet.addModule('js/recorder-worklet.js?v=1.5.2').then(function () {
-      var recorder = new AudioWorkletNode(ctx, 'ring-recorder');
-      recorder.port.onmessage = function (e) {
-        var chunk = e.data; // Float32Array ~1024 muestras, contiguo
-        var ringLen = txRing.length;
-        for (var i = 0; i < chunk.length; i++) {
-          txRing[txWriteIdx] = chunk[i];
-          txWriteIdx = (txWriteIdx + 1) % ringLen;
-        }
-        txWritten += chunk.length;
-      };
-      preamp.connect(recorder);
-      // iOS: conectar a destination con gain 0 — el worklet procesa aunque no suene
-      var mute = ctx.createGain();
-      mute.gain.value = 0;
-      recorder.connect(mute);
-      mute.connect(ctx.destination);
-    }).catch(function (err) {
-      elHint.textContent = 'AudioWorklet no disponible: ' + (err && err.message ? err.message : 'error');
-    });
-
-    // iOS: reanudar SIEMPRE (el contexto puede quedar suspendido aunque haya gesto)
+    // iOS: reanudar SIEMPRE
     if (ctx.state === 'suspended') {
       ctx.resume().then(updateBadge).catch(updateBadge);
     }
 
-    // R18: ticker del procesador (200ms) — el capturador es el worklet
-    if (!txTimer) txTimer = setInterval(tickTranscribe, TX_TICK_MS);
-
     elBtn.textContent = 'Parar';
     elBtn.classList.add('listening');
-    elHint.textContent = 'Transcribiendo… toca notas (lista completa abajo)';
+    elHint.textContent = 'Tiempo real: la nota aparece al tocar';
     renderMidiStatus();
     rafId = requestAnimationFrame(loop);
   }
 
-  // R18/R21: ticker — cada tick extrae el segmento nuevo del ring, lo resamplea a
-  // 22050 y lo pasa por Basic Pitch. Los onsets nuevos (t > último reportado) van
-  // a la lista. Basic Pitch reemplaza TODA la heurística (máscaras/gate/merge).
-  var txInferring = false;   // no solapar inferencias
-  var txReportedKeys = {};   // dedup por overlap: clave 'midi_t0.1'
-  var txResampleBuf = null;
+  // Loop tiempo real: cada rAF analiza la ventana actual con YIN (~60 mediciones/s)
+  function loop() {
+    rafId = requestAnimationFrame(loop);
+    if (!analyser) return;
+    updateBadge();
+    frameCount++;
+    try {
+      analyser.getFloatTimeDomainData(buf);
+      var rms = 0;
+      for (var i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+      rms = Math.sqrt(rms / buf.length);
+      var db = 20 * Math.log10(rms + 1e-12);
+      if (db < TX_GATE_DB) { // R19: silencio → no analizar
+        txGateOpen = false;
+        renderOff();
+        return;
+      }
+      txGateOpen = true;
 
-  function tickTranscribe() {
-    if (!txRing || !ctx || txInferring || !window.BasicPitchLib) return;
-    var ringLen = txRing.length;
-    var avail = txWritten - txProcIdx;
-    // procesar en ventanas de ~2.5s (48k*2.5=120k) para que el modelo vea contexto
-    if (avail < 240000) return;
-    var start = txProcIdx % ringLen;
-    var count = 240000; // ventana de análisis de 5s
-    var segStartAbs = txProcIdx; // muestra absoluta donde empieza la ventana
-    var seg = new Float32Array(count);
-    var firstPart = Math.min(count, ringLen - start);
-    seg.set(txRing.subarray(start, start + firstPart), 0);
-    if (count > firstPart) seg.set(txRing.subarray(0, count - firstPart), firstPart);
-    txInferring = true;
-    var segStartT = segStartAbs / ctx.sampleRate; // inicio de la ventana en s
-    // avanzar 3.5s (105k): 1.5s de overlap con la próxima ventana
-    var advance = Math.min(105000, txWritten - txProcIdx);
-    txProcIdx += advance;
-    // resamplear 48k → 22050 (linear; suficiente para detección, el modelo hace su STFT)
-    var targetSR = 22050;
-    var outLen = Math.floor(count / ctx.sampleRate * targetSR);
-    if (!txResampleBuf || txResampleBuf.length !== outLen) txResampleBuf = new Float32Array(outLen);
-    var ratio = ctx.sampleRate / targetSR;
-    for (var i = 0; i < outLen; i++) {
-      var src = i * ratio;
-      var i0 = Math.floor(src);
-      var frac = src - i0;
-      var s0 = seg[Math.min(i0, count - 1)];
-      var s1 = seg[Math.min(i0 + 1, count - 1)];
-      txResampleBuf[i] = s0 + (s1 - s0) * frac;
-    }
+      var res = window.Pitch.detectPitch(buf, ctx.sampleRate, {});
+      // telemetría siempre visible
+      elFreq.textContent = res.freq != null
+        ? res.freq.toFixed(1) + ' Hz · claridad ' + Math.round(res.clarity * 100) + '%'
+        : '';
+      if (res.freq == null) return;
 
-    var bp = new window.BasicPitchLib.BasicPitch(Promise.resolve(txModel));
-    bp.evaluateModel(txResampleBuf, function (f, o, c) {
-      // R21: notas del segmento — el modelo separa onsets; el gate de dedup es temporal
-      var notes = window.BasicPitchLib.noteFramesToTime(
-        window.BasicPitchLib.outputToNotesPoly(f, o, 0.2, 0.2, 3));
-      // ordenar por onset y fusionar duplicados (mismo midi con onset ≤0.4s entre sí
-      // = el mismo evento visto en ventanas superpuestas / frames contiguos)
-      notes.sort(function (a, b) { return a.startTimeSeconds - b.startTimeSeconds; });
-      var lastByMidi = {};
-      for (var k = 0; k < notes.length; k++) {
-        var nt = notes[k];
-        var onsetSec = segStartT + nt.startTimeSeconds;
-        var last = lastByMidi[nt.pitchMidi];
-        if (last != null && (onsetSec - last) < 0.4) continue; // duplicado del mismo evento
-        lastByMidi[nt.pitchMidi] = onsetSec;
+      var cand = window.Pitch.noteFromFreq(res.freq, A4);
+      if (!cand || cand.midi < MIDI_MIN || cand.midi > MIDI_MAX) return;
+
+      // v1.6: umbral adaptativo — agudos C5+ salen más flojos del speaker (rolloff)
+      var threshold = window.Pitch.clarifyThresholdForMidi(cand.midi);
+      if (res.clarity < threshold) return;
+
+      // display instantáneo (Hold R4)
+      var out = window.Hold.update(cand, holdState);
+      if (out.display) {
+        renderNote(out.display, res.clarity, res.freq);
+        stableNote = out.display;
+      }
+
+      // lista cronológica: evento cuando el display consolida y cambió (R7)
+      if (out.changed) {
         pushTranscriptRow({
-          midi: nt.pitchMidi,
-          chord: false, // el acorde se muestra como conjunto por timestamp (R20)
-          tStartMs: onsetSec * 1000
+          midi: cand.midi, chord: false,
+          tStartMs: performance.now() - txSessionStart
         });
       }
-      txInferring = false;
-    }, function () {}).catch(function (err) {
-      elHint.textContent = 'Error de inferencia: ' + (err && err.message ? err.message : 'error');
-      txInferring = false;
-    });
+    } catch (e) { /* frame ruidoso no rompe el loop */ }
   }
 
-  // R15: elegir voces del hop — todas las ≥ CHORD (máx 2); nota sola requiere VOICE
-  function pickVoices(scores) {
-    var list = [];
-    scores.forEach(function (score, midi) {
-      if (score >= TX_CHORD) list.push({ midi: midi, score: score });
-    });
-    list.sort(function (a, b) { return b.score - a.score; });
-    var picked = list.slice(0, 2);
-    if (picked.length === 0) return null;
-    if (picked.length === 1 && picked[0].score < TX_VOICE) return null;
-    if (picked.length === 2 && picked[0].score < TX_VOICE && picked[1].score < TX_VOICE) {
-      return null;
-    }
-    // acorde candidato: 2 voces fuertes (marcado provisorio; el eventStream
-    // solo lo confirma como ♪♪ si ambas persisten ≥3 hops — filtro de transitorios)
-    if (picked.length === 2) {
-      picked[0].chordCand = true;
-      picked[1].chordCand = true;
-    }
-    return picked;
-  }
-
-  var txEventCount = 0;
   function pushTranscriptRow(ev) {
     txEventCount++;
     var note = window.Pitch.noteFromMidi(ev.midi);
     if (!note) return;
-    var label = noteLabel(note) + (ev.chord ? ' ♪♪' : '');
-    var tSec = ((ev.tStartMs) / 1000).toFixed(1);
-
-    // R20: display grande arriba = última nota o conjunto tocado (flushGroup)
-    var t = ev.tStartMs;
-    // agrupar: si otro evento comparte onset ±80ms, es el mismo conjunto
-    if (!txPendingGroup || Math.abs(t - txPendingGroup.t) > 80) {
-      flushGroup();
-      txPendingGroup = { t: t, labels: [label] };
-    } else {
-      txPendingGroup.labels.push(label);
-    }
-
+    var label = noteLabel(note);
+    var tSec = (ev.tStartMs / 1000).toFixed(1);
     var li = document.createElement('li');
     li.textContent = '#' + txEventCount + ' ' + label + ' · +' + tSec + 's';
-    if (ev.chord) li.classList.add('chord');
     elLog.appendChild(li);
-    while (elLog.children.length > 500) elLog.removeChild(elLog.firstChild); // guard dura
-  }
-
-  // R20: el conjunto se flush-ea al confirmarse (o al llegar otro onset distinto)
-  function flushGroup() {
-    if (!txPendingGroup) return;
-    elNote.textContent = txPendingGroup.labels.join(' + ');
-    elNote.classList.remove('off');
-    txPendingGroup = null;
+    while (elLog.children.length > 500) elLog.removeChild(elLog.firstChild);
   }
 
   function stopTranscribe() {
-    if (txTimer) { clearInterval(txTimer); txTimer = null; }
-    txRing = null; txEs = null;
-    txPendingGroup = null;
+    txGateOpen = false;
+    txLastRms = 0;
     elLog.classList.remove('chrono');
-    elLog.innerHTML = ''; // nueva sesión → lista vacía
+    elLog.innerHTML = '';
     txEventCount = 0;
   }
 
