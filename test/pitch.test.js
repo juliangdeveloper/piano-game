@@ -174,3 +174,14 @@ test('13: roundtrip noteFromMidi ↔ noteFromFreq en todo el rango MIDI', () => 
     assert.strictEqual(byFreq.midi, m, `midi ${m}: ${byMidi.name}${byMidi.octave} → ${hz}Hz → volvió ${byFreq.midi}`);
   }
 });
+
+test('14: clarifyThresholdForMidi — 0.90 graves/C5-, 0.78 agudos C5+ (rolloff de speaker)', () => {
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(48), 0.90); // C3
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(71), 0.90); // B4: aún estricto
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(72), 0.78); // C5: primero en fallar
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(76), 0.78); // E5
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(81), 0.78); // A5
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(96), 0.78); // C7
+  // opts override gana
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(72, { strict: 0.95, relaxed: 0.85 }), 0.85);
+});
