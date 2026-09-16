@@ -16,6 +16,11 @@ Detector monofónico de notas de piano vía micrófono. Página estática para G
 - **R11**: Tres fuentes de entrada seleccionables: `mic` (cadena R8, default), `midi` (Web MIDI: note-on → display inmediato vía `Hold.midiUpdate`, note-off → display "—" al instante, sin YIN/hold/contador; status line `⚙ midi` visible en `midiStatus`), `line` (getUserMedia con preamp ×1 en vez de ×4). Si Web MIDI no está disponible o no hay dispositivo → aviso en hint, sin crash.
 - **R12**: La fuente elegida persiste en `localStorage` (`piano-game.source`). El botón ⚙ (abre/cierra el panel) solo es visible cuando el detector está parado.
 - **R13**: `Pitch.noteFromMidi(m)` pura en `pitch.js`: número entero 0–127 → {name, octave, cents:0, midi}; fuera de rango o no-entero → null. TDD (C4=60, A4=69, extremos, roundtrip 0–127).
+- **R14**: Modo Transcripción (📝): arquitectura de 2 partes — capturador (ScriptProcessorNode escribe audio crudo a ring buffer de 60s, sin análisis) + procesador (cada 200ms toma el tramo nuevo, ventanas de 4096 con hop de 1024 muestras ~21ms, FFT + máscaras). La ventana corre con la señal: lo viejo cae del buffer, los eventos reportados permanecen.
+- **R15**: Detección dirigida por máscaras (`js/mask.js`): 61 máscaras C2–C7 (midi 36–96, = 61 teclas del CT-S1). Score por nota = energía ponderada en fundamental+8 armónicos (1/k) / energía total, calibrado en runtime (seno puro = 1.0), penalización de subarmónicos. Umbrales: VOICE ≥0.6 (nota sola), CHORD_MIN ≥0.45 (acorde: mitad física de energía por nota), máx 2 voces/hop.
+- **R16**: Merge de eventos (`js/eventstream.js`): run ≥2 hops emite evento inmediato (~42ms tras onset, lista en vivo); se extiende in-place mientras la nota siga; gap ≤3 hops de la misma nota = misma pulsación (decaimiento del piano); gap mayor = re-tocada (evento nuevo).
+- **R17**: Lista cronológica completa de la sesión, sin límite: `#n Nota · +X.Xs` (+ intervalo desde la anterior). Teclas SIEMPRE individuales (acorde = 2 entradas con mismo timestamp, marcadas ♪♪). Se limpia solo al iniciar nueva sesión.
+- **R18**: Ticker del procesador: 200ms fijos, independiente del rAF (setInterval); procesa el backlog completo desde la última muestra procesada (backfill imposible de perder).
 
 ## Reparto de archivos (partición estricta entre agentes)
 

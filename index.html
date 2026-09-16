@@ -223,6 +223,28 @@
       min-height: 34px;
       align-content: center;
     }
+    #noteLog.chrono {
+      display: block;
+      max-height: 30vh;
+      overflow-y: auto;
+      text-align: left;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 14px;
+      min-height: 0;
+    }
+    #noteLog.chrono li {
+      background: none;
+      border: none;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      padding: 5px 2px;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+    }
+    #noteLog.chrono li.chord { color: var(--accent); }
     #noteLog li {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -277,6 +299,7 @@
   <section id="settings">
     <div class="settings-title">Fuente de entrada</div>
     <label><input type="radio" name="source" value="mic"> 🎤 Micrófono</label>
+    <label><input type="radio" name="source" value="transcribe"> 📝 Transcripción (lista completa)</label>
     <label><input type="radio" name="source" value="midi"> 🎹 MIDI (USB / Bluetooth)</label>
     <label><input type="radio" name="source" value="line"> 🔌 Línea (cable)</label>
     <div id="midiStatus"></div>
@@ -310,8 +333,11 @@
     <span id="version"></span>
   </footer>
 
-  <script src="js/pitch.js?v=1.3.2"></script>
-  <script src="js/hold.js?v=1.3.2"></script>
-  <script src="js/app.js?v=1.3.2"></script>
+  <script src="js/pitch.js?v=1.4.0"></script>
+  <script src="js/hold.js?v=1.4.0"></script>
+  <script src="js/fft.js?v=1.4.0"></script>
+  <script src="js/mask.js?v=1.4.0"></script>
+  <script src="js/eventstream.js?v=1.4.0"></script>
+  <script src="js/app.js?v=1.4.0"></script>
 </body>
 </html>
