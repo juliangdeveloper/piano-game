@@ -468,12 +468,16 @@
       // R21: notas del segmento — el modelo separa onsets; el gate de dedup es temporal
       var notes = window.BasicPitchLib.noteFramesToTime(
         window.BasicPitchLib.outputToNotesPoly(f, o, 0.25, 0.25, 3));
+      // ordenar por onset y fusionar duplicados (mismo midi con onset ≤0.4s entre sí
+      // = el mismo evento visto en ventanas superpuestas / frames contiguos)
+      notes.sort(function (a, b) { return a.startTimeSeconds - b.startTimeSeconds; });
+      var lastByMidi = {};
       for (var k = 0; k < notes.length; k++) {
         var nt = notes[k];
         var onsetSec = segStartT + nt.startTimeSeconds;
-        var key = nt.pitchMidi + '_' + (Math.round(onsetSec * 10) / 10);
-        if (txReportedKeys[key]) continue; // ya reportado (overlap entre ventanas)
-        txReportedKeys[key] = true;
+        var last = lastByMidi[nt.pitchMidi];
+        if (last != null && (onsetSec - last) < 0.4) continue; // duplicado del mismo evento
+        lastByMidi[nt.pitchMidi] = onsetSec;
         pushTranscriptRow({
           midi: nt.pitchMidi,
           chord: false, // el acorde se muestra como conjunto por timestamp (R20)
