@@ -439,13 +439,12 @@
     if (avail < 240000) return;
     var start = txProcIdx % ringLen;
     var count = 240000; // ventana de análisis de 5s
+    var segStartAbs = txProcIdx; // muestra absoluta donde empieza la ventana
     var seg = new Float32Array(count);
     var firstPart = Math.min(count, ringLen - start);
     seg.set(txRing.subarray(start, start + firstPart), 0);
     if (count > firstPart) seg.set(txRing.subarray(0, count - firstPart), firstPart);
     txInferring = true;
-    var segStartT = (txProcIdx - count) / ctx.sampleRate; // seg del segmento en s absolutos
-
     // resamplear 48k → 22050 (linear; suficiente para detección, el modelo hace su STFT)
     var targetSR = 22050;
     var outLen = Math.floor(count / ctx.sampleRate * targetSR);
