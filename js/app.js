@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.4.3';
+  var VERSION = 'v1.5.0';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -20,6 +20,7 @@
   var TX_TICK_MS = 200;       // R18: ticker del procesador
   var TX_VOICE = 0.6;         // R15: umbral nota sola
   var TX_CHORD = 0.45;        // R15: umbral acorde
+  var TX_GATE_DB = -45;       // R19: gate — debajo de esto es silencio/ruido de fondo
 
   // ---- DOM ----
   var elBtn = document.getElementById('btnToggle');
@@ -45,6 +46,8 @@
   var txEs = null;        // EventStream
   var txSessionStart = 0; // performance.now() al iniciar sesión
   var txLastNoteIdx = 0;  // último eventIdx mostrado en la lista
+  var txGateOpen = false; // R19: estado del gate (histéresis)
+  var txPendingGroup = null; // R20: agrupación de notas con onset simultáneo
 
   // ---- Estado ----
   var ctx = null;
@@ -370,6 +373,7 @@
     txEventCount = 0;
     elLog.classList.add('chrono'); // R17: lista cronológica completa
     elLog.innerHTML = '';
+    txPendingGroup = null;
 
     // R14 capturador: AudioWorklet (stream contiguo real, iOS 14.5+).
     // v1.4.2 usaba AnalyserNode: sus snapshots se solapan (el mismo audio
@@ -431,6 +435,10 @@
     var segStartT = txProcIdx - count; // muestra absoluta del inicio del seg
     for (var off = 0; off + 4096 <= count; off += TX_HOP) {
       var win = seg.subarray(off, off + 4096);
+      // R19: gate de dB — silencio/ruido de fondo no consulta máscaras
+      var g = window.Gate.decide(win, TX_GATE_DB, txGateOpen);
+      txGateOpen = g.open;
+      if (!g.passed) continue;
       var scores = window.Mask.scoreAll(win, ctx.sampleRate);
       var voices = pickVoices(scores);
       var tMs = (segStartT + off + 4096) / ctx.sampleRate * 1000; // fin de la ventana = tiempo del hop
@@ -471,17 +479,36 @@
     if (!note) return;
     var label = noteLabel(note) + (ev.chord ? ' ♪♪' : '');
     var tSec = ((ev.tStartMs) / 1000).toFixed(1);
+
+    // R20: display grande arriba = última nota o conjunto tocado (flushGroup)
+    var t = ev.tStartMs;
+    // agrupar: si otro evento comparte onset ±80ms, es el mismo conjunto
+    if (!txPendingGroup || Math.abs(t - txPendingGroup.t) > 80) {
+      flushGroup();
+      txPendingGroup = { t: t, labels: [label] };
+    } else {
+      txPendingGroup.labels.push(label);
+    }
+
     var li = document.createElement('li');
     li.textContent = '#' + txEventCount + ' ' + label + ' · +' + tSec + 's';
     if (ev.chord) li.classList.add('chord');
     elLog.appendChild(li);
-    // R17: lista completa — sin límite de 8; scroll interno del contenedor
     while (elLog.children.length > 500) elLog.removeChild(elLog.firstChild); // guard dura
+  }
+
+  // R20: el conjunto se flush-ea al confirmarse (o al llegar otro onset distinto)
+  function flushGroup() {
+    if (!txPendingGroup) return;
+    elNote.textContent = txPendingGroup.labels.join(' + ');
+    elNote.classList.remove('off');
+    txPendingGroup = null;
   }
 
   function stopTranscribe() {
     if (txTimer) { clearInterval(txTimer); txTimer = null; }
     txRing = null; txEs = null;
+    txPendingGroup = null;
     elLog.classList.remove('chrono');
     elLog.innerHTML = ''; // nueva sesión → lista vacía
     txEventCount = 0;
