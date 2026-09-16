@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.4.1';
+  var VERSION = 'v1.4.2';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -41,7 +41,6 @@
   var txWriteIdx = 0;     // posición de escritura
   var txWritten = 0;      // muestras totales escritas (absoluto)
   var txProcIdx = 0;      // muestras procesadas (absoluto)
-  var txScript = null;    // ScriptProcessorNode
   var txTimer = null;     // setInterval ticker
   var txEs = null;        // EventStream
   var txSessionStart = 0; // performance.now() al iniciar sesión
@@ -178,7 +177,20 @@
     updateBadge();
     if (!analyser) return;
     try {
-      processAudio();
+      // R14: en modo transcripción el analyser es el CAPTURADOR — cada frame
+      // muestreado se escribe al ring (analiza el ticker cada 200ms, no aquí)
+      if (txRing) {
+        analyser.getFloatTimeDomainData(buf);
+        var n = buf.length;
+        for (var i = 0; i < n; i++) {
+          txRing[txWriteIdx] = buf[i];
+          txWriteIdx = (txWriteIdx + 1) % txRing.length;
+        }
+        txWritten += n;
+        renderOff(); // el display grande queda en '—' (el registro es la lista)
+      } else {
+        processAudio();
+      }
     } catch (e) {
       // no romper el loop por un frame ruidoso
     }
@@ -361,45 +373,31 @@
     lp.type = 'lowpass'; lp.frequency.value = 4000; lp.Q.value = 0.707;
     var preamp = ctx.createGain();
     preamp.gain.value = (sourceMode === 'line') ? 1.0 : 4.0;
-    // R14: capturador — ScriptProcessor escribe al ring, sin análisis
-    txScript = ctx.createScriptProcessor(4096, 1, 1);
+    // R14 capturador: AnalyserNode (funciona en iOS a diferencia de ScriptProcessor,
+    // que no dispara onaudioprocess en Safari). El rAF existsente muestrea el analyser
+    // y escribe al ring; el ticker 200ms procesa el backlog igual que antes.
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 4096;
+    buf = new Float32Array(analyser.fftSize);
+    source.connect(hp); hp.connect(lp); lp.connect(preamp);
+    preamp.connect(analyser);
     txRing = new Float32Array(Math.ceil(ctx.sampleRate * TX_RING_SEC));
     txWriteIdx = 0; txWritten = 0; txProcIdx = 0;
     txEs = window.EventStream.create();
     window.EventStream.setHopMs(txEs, TX_HOP * 1000 / ctx.sampleRate);
     txSessionStart = performance.now();
     txLastNoteIdx = 0;
+    txEventCount = 0;
     elLog.classList.add('chrono'); // R17: lista cronológica completa
     elLog.innerHTML = '';
-    txEventCount = 0;
 
-    txScript.onaudioprocess = function (e) {
-      var input = e.inputBuffer.getChannelData(0);
-      var n = input.length;
-      var ringLen = txRing.length;
-      for (var i = 0; i < n; i++) {
-        txRing[txWriteIdx] = input[i];
-        txWriteIdx = (txWriteIdx + 1) % ringLen;
-      }
-      txWritten += n;
-    };
-    source.connect(hp); hp.connect(lp); lp.connect(preamp);
-    preamp.connect(txScript);
-    // Safari exige conectar el ScriptProcessor a destination para que corra;
-    // con Gain 0 en el medio (el audio NO sale por el parlante: sin feedback).
-    var mute = ctx.createGain();
-    mute.gain.value = 0;
-    txScript.connect(mute);
-    mute.connect(ctx.destination);
-
-    // R18: ticker — procesa el backlog completo desde txProcIdx
-    txTimer = setInterval(tickTranscribe, TX_TICK_MS);
-
-    // iOS: el AudioContext arranca suspendido incluso con gesto — reanudar
-    // (sin esto el ScriptProcessor nunca dispara y el ring queda vacío)
+    // iOS: reanudar SIEMPRE (el contexto puede quedar suspendido aunque haya gesto)
     if (ctx.state === 'suspended') {
       ctx.resume().then(updateBadge).catch(updateBadge);
     }
+
+    // R18: ticker del procesador (200ms) — el capturador es el rAF
+    if (!txTimer) txTimer = setInterval(tickTranscribe, TX_TICK_MS);
 
     elBtn.textContent = 'Parar';
     elBtn.classList.add('listening');
@@ -408,8 +406,9 @@
     rafId = requestAnimationFrame(loop);
   }
 
+  // R18: ticker — arranca con el begin; procesa el backlog del ring
   function tickTranscribe() {
-    if (!txRing || !txEs) return;
+    if (!txRing || !txEs || !ctx) return;
     var ringLen = txRing.length;
     var avail = txWritten - txProcIdx;
     if (avail < 4096) return; // backlog < 1 ventana: esperar
@@ -422,11 +421,9 @@
     if (count > firstPart) seg.set(txRing.subarray(0, count - firstPart), firstPart);
     txProcIdx += count;
 
-    // hops de 4096 con hop 1024: última ventana completa cabe en el segmento
-    var hopMs = TX_HOP * 1000 / ctx.sampleRate;
+    // hops de 4096 con hop 1024
     var hops = [];
     var segStartT = txProcIdx - count; // muestra absoluta del inicio del seg
-    // si hay backlog enorme (>60s), procesa solo lo último que quepa
     for (var off = 0; off + 4096 <= count; off += TX_HOP) {
       var win = seg.subarray(off, off + 4096);
       var scores = window.Mask.scoreAll(win, ctx.sampleRate);
@@ -436,9 +433,7 @@
     }
     if (hops.length) {
       var out = window.EventStream.pushBatch(txEs, hops);
-      if (out.newEvents.length) {
-        for (var i = 0; i < out.newEvents.length; i++) pushTranscriptRow(out.newEvents[i]);
-      }
+      for (var i = 0; i < out.newEvents.length; i++) pushTranscriptRow(out.newEvents[i]);
     }
   }
 
@@ -480,11 +475,6 @@
 
   function stopTranscribe() {
     if (txTimer) { clearInterval(txTimer); txTimer = null; }
-    if (txScript) {
-      txScript.onaudioprocess = null;
-      try { txScript.disconnect(); } catch (e) { /* noop */ }
-      txScript = null;
-    }
     txRing = null; txEs = null;
     elLog.classList.remove('chrono');
     elLog.innerHTML = ''; // nueva sesión → lista vacía
