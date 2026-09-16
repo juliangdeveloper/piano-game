@@ -11,9 +11,15 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.3.2';
+  var VERSION = 'v1.4.0';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
+  // R14: transcripción
+  var TX_HOP = 1024;          // muestras por hop (~21ms @48k)
+  var TX_RING_SEC = 60;       // R14: memoria de 60s
+  var TX_TICK_MS = 200;       // R18: ticker del procesador
+  var TX_VOICE = 0.6;         // R15: umbral nota sola
+  var TX_CHORD = 0.45;        // R15: umbral acorde
 
   // ---- DOM ----
   var elBtn = document.getElementById('btnToggle');
@@ -27,9 +33,19 @@
   var elSettings = document.getElementById('settings');
   var elBtnSettings = document.getElementById('btnSettings');
   var elMidiStatus = document.getElementById('midiStatus');
-  var sourceMode = 'mic'; // R11: 'mic' | 'midi' | 'line'
+  var sourceMode = 'mic'; // R11: 'mic' | 'midi' | 'line' | 'transcribe'
   var midiAccess = null;  // R11: acceso Web MIDI (solo modo midi)
   var midiInputName = '';
+  // R14: estado del modo transcripción
+  var txRing = null;      // Float32Array ring buffer (60s)
+  var txWriteIdx = 0;     // posición de escritura
+  var txWritten = 0;      // muestras totales escritas (absoluto)
+  var txProcIdx = 0;      // muestras procesadas (absoluto)
+  var txScript = null;    // ScriptProcessorNode
+  var txTimer = null;     // setInterval ticker
+  var txEs = null;        // EventStream
+  var txSessionStart = 0; // performance.now() al iniciar sesión
+  var txLastNoteIdx = 0;  // último eventIdx mostrado en la lista
 
   // ---- Estado ----
   var ctx = null;
@@ -176,6 +192,7 @@
       cancelAnimationFrame(rafId);
       rafId = 0;
     }
+    stopTranscribe(); // R14: limpiar ticker + script processor
     // R11: limpiar MIDI (handlers y acceso)
     if (midiAccess) {
       midiAccess.onstatechange = null;
@@ -204,7 +221,9 @@
     elBtn.textContent = 'Escuchar';
     elBtn.classList.remove('listening');
     elHint.textContent = (sourceMode === 'midi')
-      ? 'Conectá el piano por USB o Bluetooth MIDI y tocá Escuchar'
+      ? 'Conecta el piano por USB o Bluetooth MIDI y toca Escuchar'
+      : (sourceMode === 'transcribe')
+      ? 'Toca "Escuchar" y toca notas: quedan todas en la lista'
       : 'Toca una nota de piano cerca del micrófono';
     renderSettingsVisibility();
     updateBadge();
@@ -213,6 +232,10 @@
   function start() {
     if (sourceMode === 'midi') {
       startMidi();
+      return;
+    }
+    if (sourceMode === 'transcribe') {
+      startTranscribe();
       return;
     }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -329,6 +352,168 @@
     }
   }
 
+  // ---- R14/R18: modo Transcripción — capturador (ring 60s) + procesador (ticker 200ms) ----
+
+  function startTranscribe() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      elHint.textContent = 'Micrófono no disponible en este navegador';
+      return;
+    }
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) {
+      elHint.textContent = 'Web Audio no soportado';
+      return;
+    }
+    ctx = new AC();
+    updateBadge();
+    navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    }).then(function (mediaStream) {
+      if (!running) {
+        mediaStream.getTracks().forEach(function (t) { t.stop(); });
+        return;
+      }
+      beginTranscribe(mediaStream);
+    }).catch(function (err) {
+      stop();
+      elHint.textContent = 'Permiso de micrófono denegado: ' + (err && err.name ? err.name : 'error');
+    });
+  }
+
+  function beginTranscribe(mediaStream) {
+    stream = mediaStream;
+    var source = ctx.createMediaStreamSource(stream);
+    // R8/R11: misma cadena de acondicionamiento del mic (HP 60 + LP 4k + ×4)
+    var hp = ctx.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = 60; hp.Q.value = 0.707;
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 4000; lp.Q.value = 0.707;
+    var preamp = ctx.createGain();
+    preamp.gain.value = (sourceMode === 'line') ? 1.0 : 4.0;
+    // R14: capturador — ScriptProcessor escribe al ring, sin análisis
+    txScript = ctx.createScriptProcessor(4096, 1, 1);
+    txRing = new Float32Array(Math.ceil(ctx.sampleRate * TX_RING_SEC));
+    txWriteIdx = 0; txWritten = 0; txProcIdx = 0;
+    txEs = window.EventStream.create();
+    window.EventStream.setHopMs(txEs, TX_HOP * 1000 / ctx.sampleRate);
+    txSessionStart = performance.now();
+    txLastNoteIdx = 0;
+    elLog.classList.add('chrono'); // R17: lista cronológica completa
+    elLog.innerHTML = '';
+    txEventCount = 0;
+
+    txScript.onaudioprocess = function (e) {
+      var input = e.inputBuffer.getChannelData(0);
+      var n = input.length;
+      var ringLen = txRing.length;
+      for (var i = 0; i < n; i++) {
+        txRing[txWriteIdx] = input[i];
+        txWriteIdx = (txWriteIdx + 1) % ringLen;
+      }
+      txWritten += n;
+    };
+    source.connect(hp); hp.connect(lp); lp.connect(preamp);
+    preamp.connect(txScript);
+    // Safari exige conectar el ScriptProcessor a destination para que corra;
+    // con Gain 0 en el medio (el audio NO sale por el parlante: sin feedback).
+    var mute = ctx.createGain();
+    mute.gain.value = 0;
+    txScript.connect(mute);
+    mute.connect(ctx.destination);
+
+    // R18: ticker — procesa el backlog completo desde txProcIdx
+    txTimer = setInterval(tickTranscribe, TX_TICK_MS);
+
+    elBtn.textContent = 'Parar';
+    elBtn.classList.add('listening');
+    elHint.textContent = 'Transcribiendo… toca notas (lista completa abajo)';
+    renderMidiStatus();
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function tickTranscribe() {
+    if (!txRing || !txEs) return;
+    var ringLen = txRing.length;
+    var avail = txWritten - txProcIdx;
+    if (avail < 4096) return; // backlog < 1 ventana: esperar
+    // tomar tramo [procIdx, written): puede cruzar el wrap del ring
+    var start = txProcIdx % ringLen;
+    var count = Math.min(avail, ringLen);
+    var seg = new Float32Array(count);
+    var firstPart = Math.min(count, ringLen - start);
+    seg.set(txRing.subarray(start, start + firstPart), 0);
+    if (count > firstPart) seg.set(txRing.subarray(0, count - firstPart), firstPart);
+    txProcIdx += count;
+
+    // hops de 4096 con hop 1024: última ventana completa cabe en el segmento
+    var hopMs = TX_HOP * 1000 / ctx.sampleRate;
+    var hops = [];
+    var segStartT = txProcIdx - count; // muestra absoluta del inicio del seg
+    // si hay backlog enorme (>60s), procesa solo lo último que quepa
+    for (var off = 0; off + 4096 <= count; off += TX_HOP) {
+      var win = seg.subarray(off, off + 4096);
+      var scores = window.Mask.scoreAll(win, ctx.sampleRate);
+      var voices = pickVoices(scores);
+      var tMs = (segStartT + off + 4096) / ctx.sampleRate * 1000; // fin de la ventana = tiempo del hop
+      hops.push({ voices: voices, tMs: tMs });
+    }
+    if (hops.length) {
+      var out = window.EventStream.pushBatch(txEs, hops);
+      if (out.newEvents.length) {
+        for (var i = 0; i < out.newEvents.length; i++) pushTranscriptRow(out.newEvents[i]);
+      }
+    }
+  }
+
+  // R15: elegir voces del hop — todas las ≥ CHORD (máx 2); si la mejor ≥ VOICE, es nota sola dominante
+  function pickVoices(scores) {
+    var list = [];
+    scores.forEach(function (score, midi) {
+      if (score >= TX_CHORD) list.push({ midi: midi, score: score });
+    });
+    list.sort(function (a, b) { return b.score - a.score; });
+    var picked = list.slice(0, 2);
+    // exigir que la mejor cruce VOICE (nota clara) O que haya 2 sobre CHORD (acorde)
+    if (picked.length === 0) return null;
+    if (picked.length === 1 && picked[0].score < TX_VOICE) return null;
+    if (picked.length === 2 && picked[0].score < TX_VOICE && picked[1].score < TX_VOICE) {
+      // dos débiles: ruido con picos menores → descartar
+      return null;
+    }
+    for (var i = 0; i < picked.length; i++) {
+      picked[i].chord = picked.length > 1;
+    }
+    return picked;
+  }
+
+  var txEventCount = 0;
+  function pushTranscriptRow(ev) {
+    txEventCount++;
+    var note = window.Pitch.noteFromMidi(ev.midi);
+    if (!note) return;
+    var label = noteLabel(note) + (ev.chord ? ' ♪♪' : '');
+    var tSec = ((ev.tStartMs) / 1000).toFixed(1);
+    var li = document.createElement('li');
+    li.textContent = '#' + txEventCount + ' ' + label + ' · +' + tSec + 's';
+    if (ev.chord) li.classList.add('chord');
+    elLog.appendChild(li);
+    // R17: lista completa — sin límite de 8; scroll interno del contenedor
+    while (elLog.children.length > 500) elLog.removeChild(elLog.firstChild); // guard dura
+  }
+
+  function stopTranscribe() {
+    if (txTimer) { clearInterval(txTimer); txTimer = null; }
+    if (txScript) {
+      txScript.onaudioprocess = null;
+      try { txScript.disconnect(); } catch (e) { /* noop */ }
+      txScript = null;
+    }
+    txRing = null; txEs = null;
+    elLog.classList.remove('chrono');
+    elLog.innerHTML = ''; // nueva sesión → lista vacía
+    txEventCount = 0;
+  }
+
   // ---- Arranque real tras tener stream ----
   // (separado para mantener start() plano; se invoca desde el .then)
 
@@ -381,7 +566,7 @@
   function loadSource() {
     try {
       var saved = localStorage.getItem(LS_KEY);
-      if (saved === 'mic' || saved === 'midi' || saved === 'line') sourceMode = saved;
+      if (saved === 'mic' || saved === 'midi' || saved === 'line' || saved === 'transcribe') sourceMode = saved;
     } catch (e) { /* localStorage bloqueado → default mic */ }
   }
 
@@ -395,7 +580,8 @@
       radios[i].checked = (radios[i].value === sourceMode);
     }
     elBtnSettings.textContent = (sourceMode === 'mic') ? '⚙ mic'
-      : (sourceMode === 'midi') ? '⚙ midi' : '⚙ línea';
+      : (sourceMode === 'midi') ? '⚙ midi'
+      : (sourceMode === 'transcribe') ? '⚙ transcripción' : '⚙ línea';
   }
 
   // R12/dial 3: el ⚙ solo aparece cuando está parado
