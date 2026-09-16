@@ -19,7 +19,10 @@
   var MERGE_GAP_HOPS = 3; // gap ≤3 hops misma nota → mismo evento (decaimiento)
   var MAX_VOICES = 2;     // máx notas simultáneas por hop (acordes simples)
   var CHORD_MIN_RUN = 3;  // 2 voces deben coexistir ≥3 hops (~64ms) para confirmar acorde
-  var REATTACK_MIN_GAP_MS = 130; // re-tocada antes de esto = ES el mismo evento (extiende)
+  var REATTACK_MIN_GAP_MS = 130; // resonancia inmediata de la misma pulsación
+  var RESONANCE_MS = 400;        // E7b: ventana de resonancia — la nota vieja que
+                                 // reaparece <400ms tras su tEnd es cola, no onset
+                                 // (un decay de piano audible dura 200-400ms)
   var NEIGHBOR_MERGE_MS = 120;   // detecciones de semitonos vecinos dentro de esta ventana = UNA nota (fuga de máscara al onset)
 
   function create() {
@@ -77,7 +80,18 @@
     // --- fase 2: voices del hop ---
     if (voices && voices.length > 0) {
       var isPair = voices.length > 1;
+      // historia reciente por voz (para decidir resonancia vs re-tocada en pares):
+      // si AMBAS voces tienen eventos recientes = re-tocada real (P1); si solo una
+      // tiene historia y la otra es nueva = la vieja es COLA del decay (E7b)
       var taken = voices.slice(0, MAX_VOICES);
+      var historyCount = 0;
+      for (var hv = 0; hv < taken.length; hv++) {
+        for (var he = es.events.length - 1; he >= 0 && he >= es.events.length - 6; he--) {
+          if (es.events[he].midi === taken[hv].midi &&
+              (tMs - es.events[he].tEndMs) < RESONANCE_MS) { historyCount++; break; }
+        }
+      }
+      var bothHaveHistory = isPair && historyCount === taken.length;
       for (var v = 0; v < taken.length; v++) {
         var voice = taken[v];
         var run = null;
@@ -90,25 +104,21 @@
           run.score = Math.max(run.score, voice.score);
           if (isPair) {
             run.pairCount++;
-            // confirmar acorde: 2 voces coexisten ≥CHORD_MIN_RUN hops
             if (!run.chordConfirmed && run.pairCount >= CHORD_MIN_RUN) {
               run.chordConfirmed = true;
               if (run.ev) run.ev.chord = true;
             }
           } else if (run.pairCount > 0) {
-            run.pairCount = 0; // se rompió la coexistencia: reinicia el conteo
+            run.pairCount = 0;
           }
           if (run.ev) {
             run.ev.count = run.count;
             run.ev.tEndMs = tMs;
           } else if (run.count >= MIN_RUN) {
-            // consolidar: evento inmediato; chord provisorio (confirmable después)
-            // NOTA: NO resetear pairCount aquí — ya viene contando desde el onset
-            // (el reset v1.4.3 lo pisaba: pairCount jamás llegaba a CHORD_MIN_RUN)
             run.ev = {
               midi: run.midi,
               score: run.score,
-              chord: false, // aún no confirmado: la UI no pinta ♪♪ hasta confirmar
+              chord: false,
               tStartMs: run.tStartMs,
               tEndMs: tMs,
               count: run.count
@@ -117,19 +127,21 @@
             newEvents.push(run.ev);
           }
         } else {
-          // --- anti-duplicados al onset (por voz; las demás voces del hop se procesan normal) ---
+          // --- anti-duplicados al onset (por voz) ---
           var handled = false;
-          // 1. Resonancia: misma nota reaparece <REATTACK tras el tEnd del evento,
-          //    y el hop trae UNA sola voz (un acorde en el hop = onset nuevo real).
-          if (!isPair) {
+          // 1. Resonancia: misma nota reaparece <RESONANCE_MS con score decaído
+          //    (< prevScore*0.95 = cola). En pares con ambas voces con historia
+          //    (re-tocada real) NO aplica: son onsets nuevos.
+          if (!(bothHaveHistory)) {
             for (var q = es.events.length - 1; q >= 0 && q >= es.events.length - 6; q--) {
               var prevEv = es.events[q];
               if (prevEv.midi === voice.midi &&
-                  (tMs - prevEv.tEndMs) < REATTACK_MIN_GAP_MS) {
+                  (tMs - prevEv.tEndMs) < RESONANCE_MS &&
+                  voice.score < prevEv.score * 0.95) {
                 es.pending.push({
                   midi: voice.midi, score: voice.score,
                   tStartMs: prevEv.tStartMs, tEndMs: tMs,
-                  count: prevEv.count + 1, pairCount: 0,
+                  count: prevEv.count + 1, pairCount: isPair ? 1 : 0,
                   chordConfirmed: prevEv.chord, ev: prevEv
                 });
                 prevEv.count++;
@@ -139,12 +151,11 @@
               }
             }
           }
-          // 2. Fuga de vecino: semitono adyacente <NEIGHBOR_MERGE_MS tras una nota
-          //    fuerte = onset fugó a la máscara vecina → no genera evento.
+          // 2. Fuga de vecino: semitono adyacente con evento activo (tEnd <250ms)
           if (!handled) {
             for (var q2 = es.events.length - 1; q2 >= 0 && q2 >= es.events.length - 4; q2--) {
               var pe = es.events[q2];
-              if (Math.abs(pe.midi - voice.midi) === 1 && (tMs - pe.tStartMs) < NEIGHBOR_MERGE_MS) {
+              if (Math.abs(pe.midi - voice.midi) === 1 && (tMs - pe.tEndMs) < 250) {
                 handled = true;
                 break;
               }
@@ -165,7 +176,7 @@
       }
     }
 
-    return { newEvents: newEvents };
+return { newEvents: newEvents };
   }
 
   return {

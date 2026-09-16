@@ -59,20 +59,20 @@ test('E4: gap > 3 hops de la misma nota → evento NUEVO (re-tocada real, gap �
   assert.strictEqual(es.events[0].tStartMs, T(0));
 });
 
-test('E4b: re-tocada rápida (<150ms tras tEnd) = MISMA pulsación resonando → extiende, no duplica', () => {
+test('E4b: cola decaída (<RESONANCE_MS, score menor) = misma pulsación resonando → extiende', () => {
   const es = newEs();
-  ES.push(es, h(60), T(0));
-  ES.push(es, h(60), T(1));
+  ES.push(es, h(60, 0.9), T(0));
+  ES.push(es, h(60, 0.9), T(1));
   ES.push(es, null, T(2));
   ES.push(es, null, T(3));
-  ES.push(es, null, T(4)); // gap 3 hops: evento aún vivo… moriría al 4º
+  ES.push(es, null, T(4));
   ES.push(es, null, T(5));
-  ES.push(es, null, T(6)); // 5 hops de gap (~106ms): evento emitido muere, pero
-  // resonancia del piano: la misma nota reaparece a T(7) (~149ms tras tEnd) → merge
-  ES.push(es, h(60), T(7));
-  ES.push(es, h(60), T(8));
-  assert.strictEqual(es.events.length, 1, 'resonancia <150ms = mismo evento');
-  assert.strictEqual(es.events[0].count, 4, '2 iniciales + 2 de la resonancia');
+  ES.push(es, null, T(6));
+  // la cola reaparece DECAÍDA (0.5 < 0.9*0.95) a ~150ms → merge con el evento
+  ES.push(es, h(60, 0.5), T(7));
+  ES.push(es, h(60, 0.4), T(8));
+  assert.strictEqual(es.events.length, 1, 'cola decaída = mismo evento');
+  assert.strictEqual(es.events[0].count, 4, '2 iniciales + 2 de la cola');
 });
 
 test('E3b: gap de ≤3 hops entre runs de la misma nota → MISMO evento extendido', () => {
@@ -159,4 +159,52 @@ test('E8: reset limpia todo (nueva sesión)', () => {
   ES.reset(es);
   assert.strictEqual(es.events.length, 0);
   assert.strictEqual(es.pending.length, 0);
+});
+test('E7b: C resonando + D nueva → solo D es onset nuevo (C es resonancia, no re-loguea)', () => {
+  const es = newEs();
+  // C4 suena y se consolida
+  ES.push(es, h(60), T(0));
+  ES.push(es, h(60), T(1));
+  ES.push(es, h(60), T(2));
+  assert.strictEqual(es.events.length, 1);
+  // D4 tocada a +200ms: hops sucesivos traen C4 (decay) + D4 (onset sostenido)
+  for (let i = 10; i <= 13; i++) {
+    ES.push(es, [{ midi: 60, score: 0.5 }, { midi: 62, score: 0.8 }], T(i));
+  }
+  // C4: resonancia → sigue siendo EL MISMO evento viejo (count crece, sin evento nuevo de C4)
+  // D4: onset nuevo → SU evento propio
+  assert.strictEqual(es.events.length, 2, 'C4 + D4, sin duplicado de C4');
+  assert.strictEqual(es.events[0].midi, 60);
+  assert.strictEqual(es.events[0].count, 7, 'C4 extendida por resonancia');
+  assert.strictEqual(es.events[1].midi, 62);
+  assert.strictEqual(es.events[1].tStartMs, T(10));
+});
+
+test('E7c: acorde REAL C4+E4 (ambos sin historia) → ambos onsets nuevos', () => {
+  const es = newEs();
+  // G3 antes para dar historia al stream
+  ES.push(es, h(55), T(0));
+  ES.push(es, h(55), T(1));
+  // acorde C4+E4 sostenido (ninguno tocado antes): 3 hops coexistiendo
+  for (let i = 8; i <= 10; i++) {
+    ES.push(es, [{ midi: 60, score: 0.6 }, { midi: 64, score: 0.6 }], T(i));
+  }
+  const midis = es.events.map(e => e.midi).sort();
+  assert.deepStrictEqual(midis, [55, 60, 64], 'acorde real: ambas voces son onsets nuevos');
+  assert.strictEqual(es.events[1].chord, true, '♪♪ confirmado (3 hops coexistiendo)');
+});
+
+test('E7d: resonancia + vecino fantasma (C sonando, C# fuga al onset de D)', () => {
+  const es = newEs();
+  ES.push(es, h(60), T(0));
+  ES.push(es, h(60), T(1));
+  // D2 no: usar D4(62) nueva con C4 decay + C#4 fuga: hop trae 3 notas pero MAX_VOICES=2 toma las 2 más fuertes
+  // C#4 (61) es vecino de C4 (60) → fantasma; C4 resonancia; D4 nueva
+  for (let i = 10; i <= 12; i++) {
+    ES.push(es, [{ midi: 61, score: 0.7 }, { midi: 62, score: 0.7 }], T(i));
+  }
+  const midis = es.events.map(e => e.midi);
+  assert.ok(!midis.includes(61), 'C#4 vecino-fantasma de C4 no se loguea');
+  assert.strictEqual(midis.filter(m => m === 62).length, 1, 'D4 se loguea una vez');
+  assert.strictEqual(es.events.filter(e => e.midi === 60).length, 1, 'C4 sigue siendo su evento original');
 });
