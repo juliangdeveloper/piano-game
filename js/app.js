@@ -467,7 +467,7 @@
     bp.evaluateModel(txResampleBuf, function (f, o, c) {
       // R21: notas del segmento — el modelo separa onsets; el gate de dedup es temporal
       var notes = window.BasicPitchLib.noteFramesToTime(
-        window.BasicPitchLib.outputToNotesPoly(f, o, 0.15, 0.15, 3));
+        window.BasicPitchLib.outputToNotesPoly(f, o, 0.2, 0.2, 3));
       // ordenar por onset y fusionar duplicados (mismo midi con onset ≤0.4s entre sí
       // = el mismo evento visto en ventanas superpuestas / frames contiguos)
       notes.sort(function (a, b) { return a.startTimeSeconds - b.startTimeSeconds; });
