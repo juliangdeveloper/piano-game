@@ -46,20 +46,36 @@ test('E3: run largo extiende el MISMO evento in-place (count sube, sin duplicado
   assert.strictEqual(es.events[0].tStartMs, T(0));
 });
 
-test('E4: gap > 3 hops de la misma nota → evento NUEVO (re-tocada)', () => {
+test('E4: gap > 3 hops de la misma nota → evento NUEVO (re-tocada real, gap ≥ 300ms)', () => {
   const es = newEs();
   ES.push(es, h(60), T(0));
   ES.push(es, h(60), T(1));
-  for (let i = 2; i <= 6; i++) ES.push(es, null, T(i)); // gap 5 hops
-  ES.push(es, h(60), T(7)); // re-tocada: run nuevo empieza (count 1, sin emitir aún)
-  const out = ES.push(es, h(60), T(8)); // consolida → evento nuevo
+  for (let i = 2; i <= 16; i++) ES.push(es, null, i * 21.3); // gap ~320ms: re-tocada humana
+  ES.push(es, h(60), T(17)); // re-tocada: run nuevo (count 1, sin emitir aún)
+  const out = ES.push(es, h(60), T(18)); // consolida → evento nuevo
   assert.strictEqual(es.events.length, 2);
   assert.strictEqual(out.newEvents.length, 1);
-  assert.strictEqual(es.events[1].tStartMs, T(7));
+  assert.strictEqual(es.events[1].tStartMs, T(17));
   assert.strictEqual(es.events[0].tStartMs, T(0));
 });
 
-test('E4b: gap de ≤3 hops entre runs de la misma nota → MISMO evento extendido', () => {
+test('E4b: re-tocada rápida (<150ms tras tEnd) = MISMA pulsación resonando → extiende, no duplica', () => {
+  const es = newEs();
+  ES.push(es, h(60), T(0));
+  ES.push(es, h(60), T(1));
+  ES.push(es, null, T(2));
+  ES.push(es, null, T(3));
+  ES.push(es, null, T(4)); // gap 3 hops: evento aún vivo… moriría al 4º
+  ES.push(es, null, T(5));
+  ES.push(es, null, T(6)); // 5 hops de gap (~106ms): evento emitido muere, pero
+  // resonancia del piano: la misma nota reaparece a T(7) (~149ms tras tEnd) → merge
+  ES.push(es, h(60), T(7));
+  ES.push(es, h(60), T(8));
+  assert.strictEqual(es.events.length, 1, 'resonancia <150ms = mismo evento');
+  assert.strictEqual(es.events[0].count, 4, '2 iniciales + 2 de la resonancia');
+});
+
+test('E3b: gap de ≤3 hops entre runs de la misma nota → MISMO evento extendido', () => {
   const es = newEs();
   ES.push(es, h(60), T(0));
   ES.push(es, h(60), T(1));

@@ -19,6 +19,8 @@
   var MERGE_GAP_HOPS = 3; // gap ≤3 hops misma nota → mismo evento (decaimiento)
   var MAX_VOICES = 2;     // máx notas simultáneas por hop (acordes simples)
   var CHORD_MIN_RUN = 3;  // 2 voces deben coexistir ≥3 hops (~64ms) para confirmar acorde
+  var REATTACK_MIN_GAP_MS = 130; // re-tocada antes de esto = ES el mismo evento (extiende)
+  var NEIGHBOR_MERGE_MS = 120;   // detecciones de semitonos vecinos dentro de esta ventana = UNA nota (fuga de máscara al onset)
 
   function create() {
     return {
@@ -115,6 +117,40 @@
             newEvents.push(run.ev);
           }
         } else {
+          // --- anti-duplicados al onset (por voz; las demás voces del hop se procesan normal) ---
+          var handled = false;
+          // 1. Resonancia: misma nota reaparece <REATTACK tras el tEnd del evento,
+          //    y el hop trae UNA sola voz (un acorde en el hop = onset nuevo real).
+          if (!isPair) {
+            for (var q = es.events.length - 1; q >= 0 && q >= es.events.length - 6; q--) {
+              var prevEv = es.events[q];
+              if (prevEv.midi === voice.midi &&
+                  (tMs - prevEv.tEndMs) < REATTACK_MIN_GAP_MS) {
+                es.pending.push({
+                  midi: voice.midi, score: voice.score,
+                  tStartMs: prevEv.tStartMs, tEndMs: tMs,
+                  count: prevEv.count + 1, pairCount: 0,
+                  chordConfirmed: prevEv.chord, ev: prevEv
+                });
+                prevEv.count++;
+                prevEv.tEndMs = tMs;
+                handled = true;
+                break;
+              }
+            }
+          }
+          // 2. Fuga de vecino: semitono adyacente <NEIGHBOR_MERGE_MS tras una nota
+          //    fuerte = onset fugó a la máscara vecina → no genera evento.
+          if (!handled) {
+            for (var q2 = es.events.length - 1; q2 >= 0 && q2 >= es.events.length - 4; q2--) {
+              var pe = es.events[q2];
+              if (Math.abs(pe.midi - voice.midi) === 1 && (tMs - pe.tStartMs) < NEIGHBOR_MERGE_MS) {
+                handled = true;
+                break;
+              }
+            }
+          }
+          if (handled) continue;
           es.pending.push({
             midi: voice.midi,
             score: voice.score,
