@@ -445,6 +445,10 @@
     seg.set(txRing.subarray(start, start + firstPart), 0);
     if (count > firstPart) seg.set(txRing.subarray(0, count - firstPart), firstPart);
     txInferring = true;
+    var segStartT = segStartAbs / ctx.sampleRate; // inicio de la ventana en s
+    // avanzar 3.5s (105k): 1.5s de overlap con la próxima ventana
+    var advance = Math.min(105000, txWritten - txProcIdx);
+    txProcIdx += advance;
     // resamplear 48k → 22050 (linear; suficiente para detección, el modelo hace su STFT)
     var targetSR = 22050;
     var outLen = Math.floor(count / ctx.sampleRate * targetSR);
