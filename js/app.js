@@ -428,7 +428,7 @@
   // 22050 y lo pasa por Basic Pitch. Los onsets nuevos (t > último reportado) van
   // a la lista. Basic Pitch reemplaza TODA la heurística (máscaras/gate/merge).
   var txInferring = false;   // no solapar inferencias
-  var txLastNoteStartSec = 0; // dedup entre segmentos: onset yacimiento
+  var txReportedKeys = {};   // dedup por overlap: clave 'midi_t0.1'
   var txResampleBuf = null;
 
   function tickTranscribe() {
@@ -438,12 +438,11 @@
     // procesar en ventanas de ~2.5s (48k*2.5=120k) para que el modelo vea contexto
     if (avail < 240000) return;
     var start = txProcIdx % ringLen;
-    var count = 240000;
+    var count = 240000; // ventana de análisis de 5s
     var seg = new Float32Array(count);
     var firstPart = Math.min(count, ringLen - start);
     seg.set(txRing.subarray(start, start + firstPart), 0);
     if (count > firstPart) seg.set(txRing.subarray(0, count - firstPart), firstPart);
-    txProcIdx += count;
     txInferring = true;
     var segStartT = (txProcIdx - count) / ctx.sampleRate; // seg del segmento en s absolutos
 
@@ -469,8 +468,9 @@
       for (var k = 0; k < notes.length; k++) {
         var nt = notes[k];
         var onsetSec = segStartT + nt.startTimeSeconds;
-        if (onsetSec <= txLastNoteStartSec) continue; // ya reportado en segmento anterior
-        txLastNoteStartSec = onsetSec;
+        var key = nt.pitchMidi + '_' + (Math.round(onsetSec * 10) / 10);
+        if (txReportedKeys[key]) continue; // ya reportado (overlap entre ventanas)
+        txReportedKeys[key] = true;
         pushTranscriptRow({
           midi: nt.pitchMidi,
           chord: false, // el acorde se muestra como conjunto por timestamp (R20)
