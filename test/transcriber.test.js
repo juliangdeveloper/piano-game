@@ -17,14 +17,15 @@ test('P1: secuencia musical → eventos en orden con timestamps correctos', () =
     [N, 85], [N, 106], [N, 128], [N, 149],               // pausa 4 hops (>gap 3)
     [V(64), 170], [V(64), 191],                          // E4 re-tocada
     [N, 213], [N, 234], [N, 255], [N, 277],              // pausa 4 hops
-    [[{ midi: 60, score: 0.55 }, { midi: 64, score: 0.55 }], 298], // acorde
-    [[{ midi: 60, score: 0.55 }, { midi: 64, score: 0.55 }], 319]
+    [[{ midi: 60, score: 0.55 }, { midi: 64, score: 0.55 }], 298],
+    [[{ midi: 60, score: 0.55 }, { midi: 64, score: 0.55 }], 319],
+    [[{ midi: 60, score: 0.55 }, { midi: 64, score: 0.55 }], 340]
   ];
   for (const [voices, t] of seq) ES.push(es, voices, t);
   // C4 = 1 evento, E4 = 1 evento, acorde = 2 eventos (C4 y E4 individuales) → total 4
   assert.strictEqual(es.events.length, 4, 'teclas individuales: acorde genera 2');
   assert.deepStrictEqual(es.events.map(e => e.midi), [60, 64, 60, 64]);
-  assert.deepStrictEqual(es.events.map(e => e.chord), [false, false, true, true]);
+  assert.deepStrictEqual(es.events.map(e => e.chord), [false, false, true, true], 'acorde confirmado tras 3 hops de coexistencia');
   assert.strictEqual(es.events[0].tStartMs, 0);
   assert.strictEqual(es.events[1].tStartMs, 170);
   assert.strictEqual(es.events[2].tStartMs, 298);
