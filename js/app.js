@@ -436,9 +436,9 @@
     var ringLen = txRing.length;
     var avail = txWritten - txProcIdx;
     // procesar en ventanas de ~2.5s (48k*2.5=120k) para que el modelo vea contexto
-    if (avail < 120000) return;
+    if (avail < 240000) return;
     var start = txProcIdx % ringLen;
-    var count = 120000;
+    var count = 240000;
     var seg = new Float32Array(count);
     var firstPart = Math.min(count, ringLen - start);
     seg.set(txRing.subarray(start, start + firstPart), 0);
