@@ -175,22 +175,9 @@
     frameCount++;
     if (frameCount % FRAME_SKIP !== 0) return;
     updateBadge();
-    if (!analyser) return;
+    if (!analyser) return; // transcripción: el capturador es el worklet, no el rAF
     try {
-      // R14: en modo transcripción el analyser es el CAPTURADOR — cada frame
-      // muestreado se escribe al ring (analiza el ticker cada 200ms, no aquí)
-      if (txRing) {
-        analyser.getFloatTimeDomainData(buf);
-        var n = buf.length;
-        for (var i = 0; i < n; i++) {
-          txRing[txWriteIdx] = buf[i];
-          txWriteIdx = (txWriteIdx + 1) % txRing.length;
-        }
-        txWritten += n;
-        renderOff(); // el display grande queda en '—' (el registro es la lista)
-      } else {
-        processAudio();
-      }
+      processAudio();
     } catch (e) {
       // no romper el loop por un frame ruidoso
     }
@@ -373,14 +360,7 @@
     lp.type = 'lowpass'; lp.frequency.value = 4000; lp.Q.value = 0.707;
     var preamp = ctx.createGain();
     preamp.gain.value = (sourceMode === 'line') ? 1.0 : 4.0;
-    // R14 capturador: AnalyserNode (funciona en iOS a diferencia de ScriptProcessor,
-    // que no dispara onaudioprocess en Safari). El rAF existsente muestrea el analyser
-    // y escribe al ring; el ticker 200ms procesa el backlog igual que antes.
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 4096;
-    buf = new Float32Array(analyser.fftSize);
     source.connect(hp); hp.connect(lp); lp.connect(preamp);
-    preamp.connect(analyser);
     txRing = new Float32Array(Math.ceil(ctx.sampleRate * TX_RING_SEC));
     txWriteIdx = 0; txWritten = 0; txProcIdx = 0;
     txEs = window.EventStream.create();
@@ -391,12 +371,37 @@
     elLog.classList.add('chrono'); // R17: lista cronológica completa
     elLog.innerHTML = '';
 
+    // R14 capturador: AudioWorklet (stream contiguo real, iOS 14.5+).
+    // v1.4.2 usaba AnalyserNode: sus snapshots se solapan (el mismo audio
+    // entra 2-3 veces al ring) → timestamps inflados y notas duplicadas.
+    analyser = null; // el rAF NO captura en este modo
+    ctx.audioWorklet.addModule('js/recorder-worklet.js?v=1.4.3').then(function () {
+      var recorder = new AudioWorkletNode(ctx, 'ring-recorder');
+      recorder.port.onmessage = function (e) {
+        var chunk = e.data; // Float32Array ~1024 muestras, contiguo
+        var ringLen = txRing.length;
+        for (var i = 0; i < chunk.length; i++) {
+          txRing[txWriteIdx] = chunk[i];
+          txWriteIdx = (txWriteIdx + 1) % ringLen;
+        }
+        txWritten += chunk.length;
+      };
+      preamp.connect(recorder);
+      // iOS: conectar a destination con gain 0 — el worklet procesa aunque no suene
+      var mute = ctx.createGain();
+      mute.gain.value = 0;
+      recorder.connect(mute);
+      mute.connect(ctx.destination);
+    }).catch(function (err) {
+      elHint.textContent = 'AudioWorklet no disponible: ' + (err && err.message ? err.message : 'error');
+    });
+
     // iOS: reanudar SIEMPRE (el contexto puede quedar suspendido aunque haya gesto)
     if (ctx.state === 'suspended') {
       ctx.resume().then(updateBadge).catch(updateBadge);
     }
 
-    // R18: ticker del procesador (200ms) — el capturador es el rAF
+    // R18: ticker del procesador (200ms) — el capturador es el worklet
     if (!txTimer) txTimer = setInterval(tickTranscribe, TX_TICK_MS);
 
     elBtn.textContent = 'Parar';
@@ -437,7 +442,7 @@
     }
   }
 
-  // R15: elegir voces del hop — todas las ≥ CHORD (máx 2); si la mejor ≥ VOICE, es nota sola dominante
+  // R15: elegir voces del hop — todas las ≥ CHORD (máx 2); nota sola requiere VOICE
   function pickVoices(scores) {
     var list = [];
     scores.forEach(function (score, midi) {
@@ -445,15 +450,16 @@
     });
     list.sort(function (a, b) { return b.score - a.score; });
     var picked = list.slice(0, 2);
-    // exigir que la mejor cruce VOICE (nota clara) O que haya 2 sobre CHORD (acorde)
     if (picked.length === 0) return null;
     if (picked.length === 1 && picked[0].score < TX_VOICE) return null;
     if (picked.length === 2 && picked[0].score < TX_VOICE && picked[1].score < TX_VOICE) {
-      // dos débiles: ruido con picos menores → descartar
       return null;
     }
-    for (var i = 0; i < picked.length; i++) {
-      picked[i].chord = picked.length > 1;
+    // acorde candidato: 2 voces fuertes (marcado provisorio; el eventStream
+    // solo lo confirma como ♪♪ si ambas persisten ≥3 hops — filtro de transitorios)
+    if (picked.length === 2) {
+      picked[0].chordCand = true;
+      picked[1].chordCand = true;
     }
     return picked;
   }

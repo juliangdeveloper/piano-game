@@ -86,17 +86,42 @@ test('E5: cambio de nota → run independiente (el 60 emitido queda intacto, el 
   assert.strictEqual(es.events[1].count, 2);
 });
 
-test('E6: acorde 2 notas simultáneas → 2 eventos con mismo tStart (teclas individuales)', () => {
+test('E6: acorde 2 notas simultáneas → 2 eventos mismo tStart; ♪♪ SOLO tras coexistir ≥3 hops (filtro de transitorios)', () => {
   const es = newEs();
   ES.push(es, [{ midi: 60, score: 0.6 }, { midi: 64, score: 0.6 }], T(0));
-  const out = ES.push(es, [{ midi: 60, score: 0.6 }, { midi: 64, score: 0.6 }], T(1));
-  assert.strictEqual(es.events.length, 2);
+  ES.push(es, [{ midi: 60, score: 0.6 }, { midi: 64, score: 0.6 }], T(1));
+  // aún NO confirmado: transitorio de ataque típico (1-2 hops de coexistencia)
+  assert.strictEqual(es.events[0].chord, false, '2 hops juntos: aún sin confirmar ♪♪');
+  assert.strictEqual(es.events[1].chord, false);
+  const out = ES.push(es, [{ midi: 60, score: 0.6 }, { midi: 64, score: 0.6 }], T(2));
+  assert.strictEqual(es.events[0].chord, true, '3 hops coexistiendo: acorde confirmado');
+  assert.strictEqual(es.events[1].chord, true);
   assert.strictEqual(es.events[0].midi, 60);
   assert.strictEqual(es.events[1].midi, 64);
   assert.strictEqual(es.events[0].tStartMs, T(0));
   assert.strictEqual(es.events[1].tStartMs, T(0), 'mismo onset');
+  // NOTA: la confirmación del acorde MUTA el evento in-place (newEvents ya se
+  // emitió con el 2º hop); out.newEvents=[] en el 3er push es lo esperado.
+});
+
+test('E6b: 2 voces solo 2 hops (transitorio de ataque) → sin ♪♪ en ninguna', () => {
+  const es = newEs();
+  ES.push(es, [{ midi: 60, score: 0.6 }, { midi: 64, score: 0.5 }], T(0));
+  ES.push(es, [{ midi: 60, score: 0.6 }, { midi: 64, score: 0.5 }], T(1));
+  ES.push(es, [{ midi: 60, score: 0.6 }], T(2)); // la 2ª voz muere (transitorio)
+  ES.push(es, [{ midi: 60, score: 0.6 }], T(3));
+  const chords = es.events.map(e => e.chord);
+  assert.ok(chords.every(c => c === false), 'coexistencia < 3 hops: nada lleva ♪♪ — ' + JSON.stringify(es.events.map(e => [e.midi, e.chord])));
+});
+
+test('E6c: acorde confirmado que luego muere por gap → conserva ♪♪', () => {
+  const es = newEs();
+  for (let i = 0; i < 4; i++) {
+    ES.push(es, [{ midi: 60, score: 0.6 }, { midi: 64, score: 0.6 }], T(i));
+  }
   assert.strictEqual(es.events[0].chord, true);
-  assert.deepStrictEqual(out.newEvents.map(e => e.midi).sort(), [60, 64]);
+  for (let i = 4; i <= 8; i++) ES.push(es, null, T(i)); // gap largo: pendings mueren
+  assert.strictEqual(es.events[0].chord, true, 'confirmado = permanente');
 });
 
 test('E7: backfill — hops desordenados se ordenan antes de procesar', () => {

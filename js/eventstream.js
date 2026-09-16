@@ -18,6 +18,7 @@
   var MIN_RUN = 2;        // hops consecutivos para consolidar evento (anti-espurio)
   var MERGE_GAP_HOPS = 3; // gap ≤3 hops misma nota → mismo evento (decaimiento)
   var MAX_VOICES = 2;     // máx notas simultáneas por hop (acordes simples)
+  var CHORD_MIN_RUN = 3;  // 2 voces deben coexistir ≥3 hops (~64ms) para confirmar acorde
 
   function create() {
     return {
@@ -55,6 +56,9 @@
     if (voices && !Array.isArray(voices)) voices = [voices];
     var newEvents = [];
 
+    // --- fase 0: acompanamiento por voz para el filtro de acorde (R15) ---
+    // voices: [{midi, score, chordCand}] — chordCand = 2 voces en este hop
+
     // --- fase 1: recorrer pendientes; extender los que están, matar los vencidos ---
     for (var i = es.pending.length - 1; i >= 0; i--) {
       var p = es.pending[i];
@@ -62,12 +66,15 @@
       if (present) continue; // se extiende en fase 2
       // vencido: gap desde su último hop supera MERGE_GAP_HOPS
       if (tMs - p.tEndMs > MERGE_GAP_HOPS * es._hopMs) {
-        es.pending.splice(i, 1); // si p.ev existe, el evento ya está en la lista
+        // si era acorde no confirmado, emitirlo como nota sola
+        if (p.ev && p.ev.chord && !p.chordConfirmed) p.ev.chord = false;
+        es.pending.splice(i, 1);
       }
     }
 
     // --- fase 2: voices del hop ---
     if (voices && voices.length > 0) {
+      var isPair = voices.length > 1;
       var taken = voices.slice(0, MAX_VOICES);
       for (var v = 0; v < taken.length; v++) {
         var voice = taken[v];
@@ -79,16 +86,27 @@
           run.count++;
           run.tEndMs = tMs;
           run.score = Math.max(run.score, voice.score);
+          if (isPair) {
+            run.pairCount++;
+            // confirmar acorde: 2 voces coexisten ≥CHORD_MIN_RUN hops
+            if (!run.chordConfirmed && run.pairCount >= CHORD_MIN_RUN) {
+              run.chordConfirmed = true;
+              if (run.ev) run.ev.chord = true;
+            }
+          } else if (run.pairCount > 0) {
+            run.pairCount = 0; // se rompió la coexistencia: reinicia el conteo
+          }
           if (run.ev) {
-            // evento ya emitido: extender in-place (merge R16)
             run.ev.count = run.count;
             run.ev.tEndMs = tMs;
           } else if (run.count >= MIN_RUN) {
-            // consolidar: emitir evento (lista en vivo, ~MIN_RUN*hopMs tras el onset)
+            // consolidar: evento inmediato; chord provisorio (confirmable después)
+            // NOTA: NO resetear pairCount aquí — ya viene contando desde el onset
+            // (el reset v1.4.3 lo pisaba: pairCount jamás llegaba a CHORD_MIN_RUN)
             run.ev = {
               midi: run.midi,
               score: run.score,
-              chord: run.chord,
+              chord: false, // aún no confirmado: la UI no pinta ♪♪ hasta confirmar
               tStartMs: run.tStartMs,
               tEndMs: tMs,
               count: run.count
@@ -100,10 +118,11 @@
           es.pending.push({
             midi: voice.midi,
             score: voice.score,
-            chord: voices.length > 1,
             tStartMs: tMs,
             tEndMs: tMs,
             count: 1,
+            pairCount: isPair ? 1 : 0,
+            chordConfirmed: false,
             ev: null
           });
         }
