@@ -14,9 +14,12 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  // FFT: en browser vive en window.FFT (cargado antes por index.html).
+  // NOTA: 'root' NO está en scope dentro de la factory (era el bug de v1.4.2:
+  // ReferenceError al cargar → window.Mask undefined → el ticker moría).
   var FFT = (typeof module === 'object' && module.exports)
     ? require('./fft.js')
-    : (root.FFT || null);
+    : (typeof self !== 'undefined' ? self.FFT : null);
 
   var MIN_MIDI = 36; // C2 (84 máscaras C2..C7 — dial Julián: 84)
   var MAX_MIDI = 96; // C7
