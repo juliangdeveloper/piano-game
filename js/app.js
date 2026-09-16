@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.5.1';
+  var VERSION = 'v1.5.2';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -48,6 +48,7 @@
   var txLastNoteIdx = 0;  // último eventIdx mostrado en la lista
   var txGateOpen = false; // R19: estado del gate (histéresis)
   var txPendingGroup = null; // R20: agrupación de notas con onset simultáneo
+  var txModel = null;        // R21: modelo Basic Pitch cargado
 
   // ---- Estado ----
   var ctx = null;
@@ -376,10 +377,18 @@
     txPendingGroup = null;
 
     // R14 capturador: AudioWorklet (stream contiguo real, iOS 14.5+).
-    // v1.4.2 usaba AnalyserNode: sus snapshots se solapan (el mismo audio
-    // entra 2-3 veces al ring) → timestamps inflados y notas duplicadas.
     analyser = null; // el rAF NO captura en este modo
-    ctx.audioWorklet.addModule('js/recorder-worklet.js?v=1.4.3').then(function () {
+    // R21: cargar el modelo Basic Pitch (una vez por sesión, ~1MB cacheable)
+    if (!txModel) {
+      elHint.textContent = 'Cargando modelo de transcripción…';
+      tf.loadGraphModel('model/model.json').then(function (m) {
+        txModel = m;
+        elHint.textContent = 'Transcribiendo… toca notas (lista completa abajo)';
+      }).catch(function (err) {
+        elHint.textContent = 'No se pudo cargar el modelo: ' + (err && err.message ? err.message : 'error');
+      });
+    }
+    ctx.audioWorklet.addModule('js/recorder-worklet.js?v=1.5.2').then(function () {
       var recorder = new AudioWorkletNode(ctx, 'ring-recorder');
       recorder.port.onmessage = function (e) {
         var chunk = e.data; // Float32Array ~1024 muestras, contiguo
@@ -415,39 +424,64 @@
     rafId = requestAnimationFrame(loop);
   }
 
-  // R18: ticker — arranca con el begin; procesa el backlog del ring
+  // R18/R21: ticker — cada tick extrae el segmento nuevo del ring, lo resamplea a
+  // 22050 y lo pasa por Basic Pitch. Los onsets nuevos (t > último reportado) van
+  // a la lista. Basic Pitch reemplaza TODA la heurística (máscaras/gate/merge).
+  var txInferring = false;   // no solapar inferencias
+  var txLastNoteStartSec = 0; // dedup entre segmentos: onset yacimiento
+  var txResampleBuf = null;
+
   function tickTranscribe() {
-    if (!txRing || !txEs || !ctx) return;
+    if (!txRing || !ctx || txInferring || !window.BasicPitchLib) return;
     var ringLen = txRing.length;
     var avail = txWritten - txProcIdx;
-    if (avail < 4096) return; // backlog < 1 ventana: esperar
-    // tomar tramo [procIdx, written): puede cruzar el wrap del ring
+    // procesar en ventanas de ~2.5s (48k*2.5=120k) para que el modelo vea contexto
+    if (avail < 120000) return;
     var start = txProcIdx % ringLen;
-    var count = Math.min(avail, ringLen);
+    var count = 120000;
     var seg = new Float32Array(count);
     var firstPart = Math.min(count, ringLen - start);
     seg.set(txRing.subarray(start, start + firstPart), 0);
     if (count > firstPart) seg.set(txRing.subarray(0, count - firstPart), firstPart);
     txProcIdx += count;
+    txInferring = true;
+    var segStartT = (txProcIdx - count) / ctx.sampleRate; // seg del segmento en s absolutos
 
-    // hops de 4096 con hop 1024
-    var hops = [];
-    var segStartT = txProcIdx - count; // muestra absoluta del inicio del seg
-    for (var off = 0; off + 4096 <= count; off += TX_HOP) {
-      var win = seg.subarray(off, off + 4096);
-      // R19: gate de dB — silencio/ruido de fondo no consulta máscaras
-      var g = window.Gate.decide(win, TX_GATE_DB, txGateOpen);
-      txGateOpen = g.open;
-      if (!g.passed) continue;
-      var scores = window.Mask.scoreAll(win, ctx.sampleRate);
-      var voices = pickVoices(scores);
-      var tMs = (segStartT + off + 4096) / ctx.sampleRate * 1000; // fin de la ventana = tiempo del hop
-      hops.push({ voices: voices, tMs: tMs });
+    // resamplear 48k → 22050 (linear; suficiente para detección, el modelo hace su STFT)
+    var targetSR = 22050;
+    var outLen = Math.floor(count / ctx.sampleRate * targetSR);
+    if (!txResampleBuf || txResampleBuf.length !== outLen) txResampleBuf = new Float32Array(outLen);
+    var ratio = ctx.sampleRate / targetSR;
+    for (var i = 0; i < outLen; i++) {
+      var src = i * ratio;
+      var i0 = Math.floor(src);
+      var frac = src - i0;
+      var s0 = seg[Math.min(i0, count - 1)];
+      var s1 = seg[Math.min(i0 + 1, count - 1)];
+      txResampleBuf[i] = s0 + (s1 - s0) * frac;
     }
-    if (hops.length) {
-      var out = window.EventStream.pushBatch(txEs, hops);
-      for (var i = 0; i < out.newEvents.length; i++) pushTranscriptRow(out.newEvents[i]);
-    }
+
+    var bp = new window.BasicPitchLib.BasicPitch(Promise.resolve(txModel));
+    bp.evaluateModel(txResampleBuf, function (f, o, c) {
+      // R21: notas del segmento — el modelo separa onsets; el gate de dedup es temporal
+      var notes = window.BasicPitchLib.noteFramesToTime(
+        window.BasicPitchLib.outputToNotesPoly(f, o, 0.25, 0.25, 3));
+      for (var k = 0; k < notes.length; k++) {
+        var nt = notes[k];
+        var onsetSec = segStartT + nt.startTimeSeconds;
+        if (onsetSec <= txLastNoteStartSec) continue; // ya reportado en segmento anterior
+        txLastNoteStartSec = onsetSec;
+        pushTranscriptRow({
+          midi: nt.pitchMidi,
+          chord: false, // el acorde se muestra como conjunto por timestamp (R20)
+          tStartMs: onsetSec * 1000
+        });
+      }
+      txInferring = false;
+    }, function () {}).catch(function (err) {
+      elHint.textContent = 'Error de inferencia: ' + (err && err.message ? err.message : 'error');
+      txInferring = false;
+    });
   }
 
   // R15: elegir voces del hop — todas las ≥ CHORD (máx 2); nota sola requiere VOICE
