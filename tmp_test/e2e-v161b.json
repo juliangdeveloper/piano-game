@@ -1,0 +1,10 @@
+{
+  "version": "v1.6.1",
+  "totalRows": 0,
+  "secuenciaCompleta": [],
+  "primeras20rows": [],
+  "errorCount": 1,
+  "errores": [
+    "Cannot read properties of undefined (reading 'calibrateNoiseFloor')"
+  ]
+}
