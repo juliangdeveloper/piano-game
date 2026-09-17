@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.6.1';
+  var VERSION = 'v1.6.2';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -393,7 +393,9 @@ function beginTranscribe(mediaStream) {
       if (!analyser) return; // se paró
       try {
         analyser.getFloatTimeDomainData(buf);
-        calBlocks.push(window.Gate.rmsDbfs(buf));
+        var calDb = window.Gate.rmsDbfs(buf);
+        calBlocks.push(calDb);
+        elFreq.textContent = Math.round(calDb) + 'dB · calibrando…';
       } catch (e) { /* frame ruidoso */ }
       if (performance.now() < calEnd) {
         requestAnimationFrame(calibrateStep);
@@ -418,6 +420,7 @@ function beginTranscribe(mediaStream) {
       for (var i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
       rms = Math.sqrt(rms / buf.length);
       var db = 20 * Math.log10(rms + 1e-12);
+      elFreq.textContent = Math.round(db) + 'dB'; // v1.6.2: dB siempre visible
       if (db < txGateThresholdDb) { // R19: silencio → no analizar
         txGateOpen = false;
         return; // v1.6.1: el display SE QUEDA con la última nota
@@ -425,10 +428,11 @@ function beginTranscribe(mediaStream) {
       txGateOpen = true;
 
       var res = window.Pitch.detectPitch(buf, ctx.sampleRate, {});
-      // telemetría siempre visible
-      elFreq.textContent = res.freq != null
-        ? res.freq.toFixed(1) + ' Hz · claridad ' + Math.round(res.clarity * 100) + '%'
-        : '';
+      // telemetría: dB + Hz + claridad (dB ya está puesto arriba)
+      if (res.freq != null) {
+        elFreq.textContent = Math.round(db) + 'dB · ' + res.freq.toFixed(1)
+          + ' Hz · claridad ' + Math.round(res.clarity * 100) + '%';
+      }
       if (res.freq == null) return;
 
       var cand = window.Pitch.noteFromFreq(res.freq, A4);
