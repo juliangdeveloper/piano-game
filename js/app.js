@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.6.3';
+  var VERSION = 'v1.6.4';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -94,8 +94,8 @@
     elNoteDb.textContent = (typeof db === 'number')
       ? Math.round(db) + 'dB'
       : '';
-    // v1.3.1: la línea de Hz es telemetría (processAudio la actualiza cada frame
-    // con Hz+claridad). Solo la limpiamos al detener/reset, no aquí.
+    // v1.3.1: la línea de Hz es telemetría (el loop la actualiza cada frame con
+    // dB+Hz+claridad). Solo la limpiamos al detener/reset, no aquí.
   }
 
   function renderLog() {
@@ -132,61 +132,6 @@
     renderOff();
     elFreq.textContent = '';
     // R3/R7: fuera de rango NO borra el log; aquí tampoco.
-  }
-
-  // ---- Procesamiento de un frame de audio ----
-
-  function processAudio() {
-    analyser.getFloatTimeDomainData(buf);
-    var res = window.Pitch.detectPitch(buf, ctx.sampleRate, {
-      clarityThreshold: CLARITY_THRESHOLD
-    });
-
-    // Telemetría v1.3.1: el detector SIEMPRE mide → la línea de Hz muestra la
-    // medición cruda (Hz + claridad %) incluso cuando no cruza el umbral.
-    if (res.freq != null) {
-      elFreq.textContent = res.freq.toFixed(1) + ' Hz · claridad ' + Math.round(res.clarity * 100) + '%';
-    } else {
-      elFreq.textContent = '';
-    }
-
-    var note = null;
-    if (res.clarity >= CLARITY_THRESHOLD && res.freq != null) {
-      var cand = window.Pitch.noteFromFreq(res.freq, A4);
-      // R3: fuera de rango C2–C7 → tratado como frame sin nota (log intacto)
-      if (cand != null && cand.midi >= MIDI_MIN && cand.midi <= MIDI_MAX) {
-        note = cand;
-        lastFreq = res.freq;
-        lastClarity = res.clarity;
-      }
-    }
-
-    // R4+R10: delegar estabilidad/hold a la máquina pura (testeada en Node)
-    var out = window.Hold.update(note, holdState);
-    stableNote = out.display;
-    if (stableNote) {
-      renderNote(stableNote, lastClarity, lastFreq);
-      if (out.changed) {
-        pushLog(stableNote); // R7: solo cuando la nota estable CAMBIA
-      }
-    } else {
-      renderOff();
-    }
-  }
-
-  // ---- Loop rAF con skip (cada 2 frames) ----
-
-  function loop() {
-    rafId = requestAnimationFrame(loop);
-    frameCount++;
-    if (frameCount % FRAME_SKIP !== 0) return;
-    updateBadge();
-    if (!analyser) return; // transcripción: el capturador es el worklet, no el rAF
-    try {
-      processAudio();
-    } catch (e) {
-      // no romper el loop por un frame ruidoso
-    }
   }
 
   // ---- Start / Stop ----
