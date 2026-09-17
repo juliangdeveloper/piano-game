@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.6.0';
+  var VERSION = 'v1.6.1';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -44,6 +44,7 @@
   var txGateOpen = false; // R19: estado del gate (histéresis)
   var txLastRms = 0;      // RMS del frame anterior (score de re-ataque)
   var txEventCount = 0;   // filas de la lista en la sesión
+  var txGateThresholdDb = TX_GATE_DB; // umbral del gate (calibrado al arranque)
   var txPendingGroup = null; // R20: agrupación de notas con onset simultáneo
 
   // ---- Estado ----
@@ -382,9 +383,27 @@ function beginTranscribe(mediaStream) {
 
     elBtn.textContent = 'Parar';
     elBtn.classList.add('listening');
-    elHint.textContent = 'Tiempo real: la nota aparece al tocar';
+    elHint.textContent = 'Calibrando ambiente…';
     renderMidiStatus();
-    rafId = requestAnimationFrame(loop);
+    // v1.6.1: calibrar ruido de fondo 1.2s → gate relativo (no fijo -45)
+    var calBlocks = [];
+    var calEnd = performance.now() + 1200;
+    txGateThresholdDb = TX_GATE_DB; // fallback fijo mientras calibra
+    function calibrateStep() {
+      if (!analyser) return; // se paró
+      try {
+        analyser.getFloatTimeDomainData(buf);
+        calBlocks.push(window.Gate.rmsDbfs(buf));
+      } catch (e) { /* frame ruidoso */ }
+      if (performance.now() < calEnd) {
+        requestAnimationFrame(calibrateStep);
+      } else {
+        txGateThresholdDb = window.Gate.calibrateNoiseFloor(calBlocks) + 12;
+        elHint.textContent = 'Tiempo real · ruido ' + Math.round(txGateThresholdDb - 12) + 'dB';
+        rafId = requestAnimationFrame(loop);
+      }
+    }
+    requestAnimationFrame(calibrateStep);
   }
 
   // Loop tiempo real: cada rAF analiza la ventana actual con YIN (~60 mediciones/s)
@@ -399,10 +418,9 @@ function beginTranscribe(mediaStream) {
       for (var i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
       rms = Math.sqrt(rms / buf.length);
       var db = 20 * Math.log10(rms + 1e-12);
-      if (db < TX_GATE_DB) { // R19: silencio → no analizar
+      if (db < txGateThresholdDb) { // R19: silencio → no analizar
         txGateOpen = false;
-        renderOff();
-        return;
+        return; // v1.6.1: el display SE QUEDA con la última nota
       }
       txGateOpen = true;
 

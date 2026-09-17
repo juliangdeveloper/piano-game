@@ -61,3 +61,17 @@ test('G5: buffer de puros ceros → bloquea sin NaN', () => {
   assert.strictEqual(st.passed, false);
   assert.strictEqual(Number.isFinite(st.db), true, `db=${st.db}`);
 });
+
+test('15: calibrateNoiseFloor — mediana de bloques + piso mínimo', () => {
+  // 20 bloques de ruido -50 y 3 picos -25: la mediana debe dar el ruido de fondo
+  const noise = [];
+  for (let i = 0; i < 20; i++) noise.push(-50);
+  noise[2] = -25; noise[10] = -25; noise[18] = -25;
+  const r = Gate.calibrateNoiseFloor(noise);
+  assert.ok(Math.abs(r - (-50)) < 1, 'mediana de 20 bloques = -50, dio ' + r);
+  // piso absoluto: ambiente muerto (-120) no baja el umbral de -55
+  const dead = [];
+  for (let i = 0; i < 20; i++) dead.push(-120);
+  assert.strictEqual(Gate.calibrateNoiseFloor(dead), -55);
+});
+
