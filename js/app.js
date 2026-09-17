@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.6.7';
+  var VERSION = 'v1.6.8';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -20,7 +20,7 @@
   var TX_TICK_MS = 200;       // R18: ticker del procesador
   var TX_VOICE = 0.6;         // R15: umbral nota sola
   var TX_CHORD = 0.45;        // R15: umbral acorde
-  var TX_GATE_DB = -42;       // R19: gate — debajo de esto es silencio/ruido de fondo
+  var TX_GATE_DB = -50;       // R19: gate — debajo de esto es silencio/ruido de fondo
 
   // ---- DOM ----
   var elBtn = document.getElementById('btnToggle');
