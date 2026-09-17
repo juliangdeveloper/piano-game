@@ -25,6 +25,7 @@
   // ---- DOM ----
   var elBtn = document.getElementById('btnToggle');
   var elNote = document.getElementById('noteDisplay');
+  var elNoteDb = document.getElementById('noteDb');
   var elCents = document.getElementById('centsBar');
   var elClarity = document.getElementById('clarityBar');
   var elFreq = document.getElementById('freqText');
@@ -81,7 +82,7 @@
     elFreq.textContent = '';
   }
 
-  function renderNote(note, clarity, freq) {
+  function renderNote(note, clarity, freq, db) {
     elNote.textContent = noteLabel(note);
     elNote.classList.remove('off');
     // cents −50..+50 → posición 0..100%
@@ -89,6 +90,10 @@
     elCents.style.left = pct + '%';
     var cl = Math.max(0, Math.min(1, clarity));
     elClarity.style.width = (cl * 100) + '%';
+    // v1.6.3: dB del frame de captura, pegado al display
+    elNoteDb.textContent = (typeof db === 'number')
+      ? Math.round(db) + 'dB'
+      : '';
     // v1.3.1: la línea de Hz es telemetría (processAudio la actualiza cada frame
     // con Hz+claridad). Solo la limpiamos al detener/reset, no aquí.
   }
@@ -445,7 +450,7 @@ function beginTranscribe(mediaStream) {
       // display instantáneo (Hold R4)
       var out = window.Hold.update(cand, holdState);
       if (out.display) {
-        renderNote(out.display, res.clarity, res.freq);
+        renderNote(out.display, res.clarity, res.freq, db);
         stableNote = out.display;
       }
 
