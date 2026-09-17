@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.6.4';
+  var VERSION = 'v1.6.5';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -359,6 +359,8 @@ function beginTranscribe(mediaStream) {
   }
 
   // Loop tiempo real: cada rAF analiza la ventana actual con YIN (~60 mediciones/s)
+  var txTelemetryAt = 0;   // último refresco de telemetría (4 Hz)
+  var txTelemetryMax = -Infinity; // peak-hold del dB dentro de la ventana de refresco
   function loop() {
     rafId = requestAnimationFrame(loop);
     if (!analyser) return;
@@ -370,7 +372,18 @@ function beginTranscribe(mediaStream) {
       for (var i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
       rms = Math.sqrt(rms / buf.length);
       var db = 20 * Math.log10(rms + 1e-12);
-      elFreq.textContent = Math.round(db) + 'dB'; // v1.6.2: dB siempre visible
+      // v1.6.5: telemetría a 4 Hz con peak-hold — legible en vivo
+      if (db > txTelemetryMax) txTelemetryMax = db;
+      var now = performance.now();
+      var showTele = now - txTelemetryAt >= 250;
+      if (showTele) {
+        var peak = txTelemetryMax;
+        txTelemetryMax = -Infinity;
+        txTelemetryAt = now;
+      }
+      if (showTele && db < txGateThresholdDb) {
+        elFreq.textContent = Math.round(peak) + 'dB'; // solo dB bajo el gate
+      }
       if (db < txGateThresholdDb) { // R19: silencio → no analizar
         txGateOpen = false;
         return; // v1.6.1: el display SE QUEDA con la última nota
@@ -378,9 +391,9 @@ function beginTranscribe(mediaStream) {
       txGateOpen = true;
 
       var res = window.Pitch.detectPitch(buf, ctx.sampleRate, {});
-      // telemetría: dB + Hz + claridad (dB ya está puesto arriba)
-      if (res.freq != null) {
-        elFreq.textContent = Math.round(db) + 'dB · ' + res.freq.toFixed(1)
+      // telemetría: dB pico + Hz + claridad, refresco 4 Hz (legible)
+      if (showTele && res.freq != null) {
+        elFreq.textContent = Math.round(peak) + 'dB · ' + res.freq.toFixed(1)
           + ' Hz · claridad ' + Math.round(res.clarity * 100) + '%';
       }
       if (res.freq == null) return;
@@ -424,6 +437,8 @@ function beginTranscribe(mediaStream) {
   function stopTranscribe() {
     txGateOpen = false;
     txLastRms = 0;
+    txTelemetryMax = -Infinity;
+    txTelemetryAt = 0;
     elNoteDb.textContent = '';
     elLog.classList.remove('chrono');
     elLog.innerHTML = '';
