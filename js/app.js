@@ -551,8 +551,9 @@ function beginTranscribe(mediaStream) {
       }
       if (!n.rest && n.ottava === '8vb') {
         var ann = new VF.Annotation('8vb');
-        ann.setFont('sans-serif', 9, 'italic');
-        ann.setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM);
+        ann.setFont('sans-serif', 10, 'italic');
+        // arriba: las graves ya usan muchas líneas adicionales hacia abajo
+        ann.setVerticalJustification(VF.Annotation.VerticalJustify.TOP);
         sn.addModifier(ann);
       }
       notes.push(sn);
@@ -572,8 +573,8 @@ function beginTranscribe(mediaStream) {
     var nMeas = Math.max(1, data.measures.length);
     var innerW = (elStaffWrap && elStaffWrap.clientWidth) ? elStaffWrap.clientWidth : 358;
     var staveW = Math.max(260, innerW - 12);
-    var rowH = 118;
-    var height = 16 + nMeas * rowH;
+    var rowH = 148;
+    var height = 24 + nMeas * rowH;
     var width = staveW + 10;
 
     elStaff.innerHTML = '';
@@ -583,7 +584,7 @@ function beginTranscribe(mediaStream) {
       var ctx = renderer.getContext();
 
       for (var m = 0; m < nMeas; m++) {
-        var y = 8 + m * rowH;
+        var y = 18 + m * rowH;
         var stave = new VF.Stave(4, y, staveW);
         if (m === 0) {
           stave.addClef(data.clef).addTimeSignature(data.timeSigStr);
