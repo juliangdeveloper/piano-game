@@ -120,14 +120,41 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      gap: 14px;
-      padding: 16px;
+      justify-content: flex-start;
+      gap: 12px;
+      padding: 12px 16px;
       min-height: 0;
+      overflow-y: auto;
     }
 
+    #staffPanel {
+      width: 100%;
+      background: #f4efe4;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      overflow: hidden;
+    }
+    .staff-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: #6b6358;
+      padding: 8px 10px 0;
+    }
+    #staffWrap {
+      overflow: auto;
+      max-height: 32vh;
+      min-height: 128px;
+      -webkit-overflow-scrolling: touch;
+    }
+    #staff {
+      width: 100%;
+      min-height: 110px;
+    }
+    #staff svg { display: block; }
+
     #noteDisplay {
-      font-size: clamp(72px, 24vw, 112px);
+      font-size: clamp(56px, 18vw, 96px);
       font-weight: 800;
       line-height: 1;
       letter-spacing: -2px;
@@ -232,7 +259,7 @@
     }
     #noteLog.chrono {
       display: block;
-      max-height: 30vh;
+      max-height: 18vh;
       overflow-y: auto;
       text-align: left;
       background: var(--panel);
@@ -332,6 +359,13 @@
     <div id="freqText"></div>
     <div id="hint">Toca una nota de piano cerca del micrófono</div>
 
+    <div id="staffPanel">
+      <div class="staff-label">Partitura · ♩=80 · 4/4</div>
+      <div id="staffWrap" aria-label="Partitura">
+        <div id="staff"></div>
+      </div>
+    </div>
+
     <ul id="noteLog"></ul>
   </main>
 
@@ -340,10 +374,12 @@
     <span id="version"></span>
   </footer>
 
-  <script src="js/gate.js?v=1.6.8"></script>
-  <script src="js/pitch.js?v=1.6.8"></script>
-  <script src="js/hold.js?v=1.6.8"></script>
-  <script src="js/eventstream.js?v=1.6.8"></script>
-  <script src="js/app.js?v=1.6.8"></script>
+  <script src="js/gate.js?v=1.7.0"></script>
+  <script src="js/pitch.js?v=1.7.0"></script>
+  <script src="js/hold.js?v=1.7.0"></script>
+  <script src="js/eventstream.js?v=1.7.0"></script>
+  <script src="js/vexflow.js?v=1.7.0"></script>
+  <script src="js/score.js?v=1.7.0"></script>
+  <script src="js/app.js?v=1.7.0"></script>
 </body>
 </html>
