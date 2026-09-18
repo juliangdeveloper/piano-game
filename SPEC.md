@@ -21,13 +21,19 @@ Detector monofónico de notas de piano vía micrófono. Página estática para G
 - **R16**: Merge de eventos (`js/eventstream.js`): run ≥2 hops emite evento inmediato (~42ms tras onset, lista en vivo); se extiende in-place mientras la nota siga; gap ≤3 hops de la misma nota = misma pulsación (decaimiento del piano); gap mayor = re-tocada (evento nuevo).
 - **R17**: Lista cronológica completa de la sesión, sin límite: `#n Nota · +X.Xs` (+ intervalo desde la anterior). Teclas SIEMPRE individuales (acorde = 2 entradas con mismo timestamp, marcadas ♪♪). Se limpia solo al iniciar nueva sesión.
 - **R18**: Ticker del procesador: 200ms fijos, independiente del rAF (setInterval); procesa el backlog completo desde la última muestra procesada (backfill imposible de perder).
+- **R21**: Partitura tradicional en vivo (`#staff`): mientras se escucha (mic/línea/MIDI), los eventos de `EventStream` se cuantizan (`js/score.js`) y se dibujan con VexFlow. Al pulsar Parar la partitura se queda; al iniciar una sesión nueva se limpia. El log de texto (`#noteLog`) no se sustituye.
+- **R22**: VexFlow **vendored** en `js/vexflow.js` (pin **4.2.5**, fuentes musicales Gonville/Bravura/Petaluma embebidas). Cero CDN, cero `fetch` de webfonts (Google u otro). Carga: `<script src="js/vexflow.js?v=…">`.
+- **R23**: Cuantización de la partitura: default ♩=80, 4/4, clave de sol. Duración de cada evento = `(tEndMs-tStartMs)` al valor más cercano entre [redonda, blanca, negra, corchea, semicorchea]. Huecos ≥ ½ semicorchea → silencios. Eventos con el mismo `tStartMs` → acorde. MIDI < 48 (C3) se escribe una octava arriba con marca **8vb** (sigue en clave de sol; no hay pentagrama de fa en v1.7).
 
 ## Reparto de archivos (partición estricta entre agentes)
 
-- `index.html` — UI móvil-first (390px), sin librerías → **Agente B**
-- `js/app.js` — mic + AudioContext + AnalyserNode + loop de render → **Agente B**
+- `index.html` — UI móvil-first (390px), sin librerías de CDN → **Agente B**
+- `js/app.js` — mic + AudioContext + AnalyserNode + loop de render + dibujo de la partitura → **Agente B**
 - `js/pitch.js` — lógica pura, sin DOM, UMD (`module.exports` + `window.Pitch`) → **Agente A**
+- `js/score.js` — lógica pura EventStream → notas VexFlow-ready, UMD (`window.Score`) → **Agente A**
+- `js/vexflow.js` — VexFlow 4.2.5 vendored (offline)
 - `test/pitch.test.js` — tests Node (assert nativo, sin deps) contra buffers sintéticos → **Agente A**
+- `test/score.test.js` — tests de cuantización (duraciones, silencios, midi→key), sin red
 - `package.json`, `README.md`, `.gitignore`, `SPEC.md` → orquestador (ya existen, NO modificar)
 
 Los agentes NO ejecutan git (init/commit/push lo hace el orquestador). NO usar npm install (no hay dependencias).
@@ -57,7 +63,7 @@ Pitch.hzForNote(name, octave, a4=440) -> number
 
 - Fondo oscuro, tipografía grande para la nota: formato `A4 · La4` (nomenclatura anglosajona + latina: Do Do# Re Re# Mi Fa Fa# Sol Sol# La La# Si).
 - Elementos con id: `btnToggle` (texto "Escuchar"/"Parar"), `noteDisplay`, `centsBar` (barra horizontal −50..+50 con marcador), `clarityBar` (0..1), `freqText`, `noteLog` (lista, últimas 8), `badgeSuspended` (oculto por defecto, texto "Audio suspendido — toca para reanudar"), `hint` ("Toca una nota de piano cerca del micrófono").
-- Meta viewport + safe-area; sin scroll; sin recursos externos (ninguna fuente/CDN).
+- Meta viewport + safe-area; sin scroll de página (el main y la partitura sí hacen scroll interno); sin recursos externos (ninguna fuente/CDN). `#staff` / `#staffWrap`: pentagrama ~390px, fondo claro para glifos VexFlow, sistemas apilados (un compás por renglón).
 
 ## Loop (app.js)
 
