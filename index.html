@@ -127,15 +127,12 @@
       overflow-y: auto;
     }
 
-    #staffWrap {
+    #staffPanel {
       width: 100%;
       background: #f4efe4;
       border-radius: 12px;
       border: 1px solid var(--line);
-      overflow: auto;
-      max-height: 32vh;
-      min-height: 128px;
-      -webkit-overflow-scrolling: touch;
+      overflow: hidden;
     }
     .staff-label {
       font-size: 11px;
@@ -143,6 +140,12 @@
       letter-spacing: 1.2px;
       color: #6b6358;
       padding: 8px 10px 0;
+    }
+    #staffWrap {
+      overflow: auto;
+      max-height: 32vh;
+      min-height: 128px;
+      -webkit-overflow-scrolling: touch;
     }
     #staff {
       width: 100%;
@@ -356,9 +359,11 @@
     <div id="freqText"></div>
     <div id="hint">Toca una nota de piano cerca del micrófono</div>
 
-    <div id="staffWrap" aria-label="Partitura">
+    <div id="staffPanel">
       <div class="staff-label">Partitura · ♩=80 · 4/4</div>
-      <div id="staff"></div>
+      <div id="staffWrap" aria-label="Partitura">
+        <div id="staff"></div>
+      </div>
     </div>
 
     <ul id="noteLog"></ul>
