@@ -11,7 +11,7 @@
   var MIDI_MAX = 96; // C7
   var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
   var LOG_MAX = 8;
-  var VERSION = 'v1.6.8';
+  var VERSION = 'v1.7.0';
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
   // R14: transcripción
@@ -49,6 +49,13 @@
   var txPeakDb = -Infinity; // v1.6.6: pico dB del ataque de la candidata
   var txGateThresholdDb = TX_GATE_DB; // umbral del gate (calibrado al arranque)
   var txPendingGroup = null; // R20: agrupación de notas con onset simultáneo
+  // R20: partitura en vivo (EventStream → Score → VexFlow)
+  var SCORE_OPTS = { bpm: 80, timeSig: '4/4', clef: 'treble' };
+  var elStaff = document.getElementById('staff');
+  var elStaffWrap = document.getElementById('staffWrap');
+  var staffLastDraw = 0;
+  var midiHeld = {};     // midi → true, para hops de la partitura en modo MIDI
+  var midiTickId = 0;
 
   // ---- Estado ----
   var ctx = null;
@@ -170,6 +177,9 @@
       buf = null;
     }
     resetDetection(); // display '—' SIN borrar el log (R7)
+    if (midiTickId) { clearInterval(midiTickId); midiTickId = 0; }
+    midiHeld = {};
+    scheduleStaffRedraw(true); // R20: al parar, la partitura se queda
     elBtn.textContent = 'Escuchar';
     elBtn.classList.remove('listening');
     elHint.textContent = (sourceMode === 'midi')
@@ -235,6 +245,10 @@
         return;
       }
       midiInputName = input.name || 'MIDI';
+      beginScoreSession(20);
+      midiHeld = {};
+      if (midiTickId) clearInterval(midiTickId);
+      midiTickId = setInterval(midiScoreTick, 20);
       input.onmidimessage = onMidiMessage;
       // escuchar conexiones/desconexiones en caliente
       access.onstatechange = function () {
@@ -279,6 +293,7 @@
     var note = window.Pitch.noteFromMidi(midiNum);
     if (!note) return;
     if (status === 0x90 && velocity > 0) {
+      midiHeld[midiNum] = true;
       var out = window.Hold.midiUpdate(holdState, note);
       if (out.display) {
         lastFreq = null; // MIDI no da Hz medidos; mostramos la referencia teórica
@@ -287,6 +302,7 @@
       }
       if (out.changed) pushLog(out.display);
     } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
+      delete midiHeld[midiNum];
       var offOut = window.Hold.midiUpdate(holdState, null); // dial: cae al instante
       if (!offOut.display) renderOff();
     }
@@ -318,9 +334,7 @@ function beginTranscribe(mediaStream) {
     buf = new Float32Array(analyser.fftSize);
     source.connect(hp); hp.connect(lp); lp.connect(preamp);
     preamp.connect(analyser);
-    txEs = window.EventStream.create();
-    window.EventStream.setHopMs(txEs, 2048 * 1000 / ctx.sampleRate);
-    txSessionStart = performance.now();
+    beginScoreSession(16);
     txEventCount = 0;
     elLog.classList.add('chrono');
     elLog.innerHTML = '';
@@ -389,8 +403,10 @@ function beginTranscribe(mediaStream) {
       if (showTele && db < txGateThresholdDb) {
         elFreq.textContent = Math.round(peak) + 'dB'; // solo dB bajo el gate
       }
+      var tMs = now - txSessionStart;
       if (db < txGateThresholdDb) { // R19: silencio → no analizar
         txGateOpen = false;
+        feedScoreHop(null, tMs);
         return; // v1.6.1: el display SE QUEDA con la última nota
       }
       txGateOpen = true;
@@ -401,14 +417,23 @@ function beginTranscribe(mediaStream) {
         elFreq.textContent = Math.round(peak) + 'dB · ' + res.freq.toFixed(1)
           + ' Hz · claridad ' + Math.round(res.clarity * 100) + '%';
       }
-      if (res.freq == null) return;
+      if (res.freq == null) {
+        feedScoreHop(null, tMs);
+        return;
+      }
 
       var cand = window.Pitch.noteFromFreq(res.freq, A4);
-      if (!cand || cand.midi < MIDI_MIN || cand.midi > MIDI_MAX) return;
+      if (!cand || cand.midi < MIDI_MIN || cand.midi > MIDI_MAX) {
+        feedScoreHop(null, tMs);
+        return;
+      }
 
       // v1.6: umbral adaptativo — agudos C5+ salen más flojos del speaker (rolloff)
       var threshold = window.Pitch.clarifyThresholdForMidi(cand.midi);
-      if (res.clarity < threshold) return;
+      if (res.clarity < threshold) {
+        feedScoreHop(null, tMs);
+        return;
+      }
 
       // v1.6.6: peak del ataque por nota (el frame instantáneo post-AGC es plano)
       if (cand.midi !== txPeakMidi) {
@@ -423,6 +448,9 @@ function beginTranscribe(mediaStream) {
       if (out.display) {
         renderNote(out.display, res.clarity, res.freq, txPeakDb);
         stableNote = out.display;
+        feedScoreHop([{ midi: out.display.midi, score: res.clarity }], tMs);
+      } else {
+        feedScoreHop(null, tMs);
       }
 
       // lista cronológica: evento cuando el display consolida y cambió (R7)
@@ -459,6 +487,131 @@ function beginTranscribe(mediaStream) {
     elLog.innerHTML = '';
     txEventCount = 0;
   }
+
+  // ---- R20: partitura en vivo (EventStream → Score → VexFlow vendored) ----
+
+  function beginScoreSession(hopMs) {
+    txEs = window.EventStream.create();
+    window.EventStream.setHopMs(txEs, hopMs || 16);
+    txSessionStart = performance.now();
+    drawStaff([]);
+  }
+
+  function feedScoreHop(voices, tMs) {
+    if (!txEs || !window.EventStream) return;
+    window.EventStream.push(txEs, voices, tMs);
+    scheduleStaffRedraw();
+  }
+
+  function midiScoreTick() {
+    if (!running || !txEs || !window.EventStream) return;
+    var tMs = performance.now() - txSessionStart;
+    var keys = Object.keys(midiHeld);
+    var voices = null;
+    if (keys.length) {
+      voices = keys.slice(0, 2).map(function (m) {
+        return { midi: +m, score: 1 };
+      });
+    }
+    window.EventStream.push(txEs, voices, tMs);
+    scheduleStaffRedraw();
+  }
+
+  function scheduleStaffRedraw(force) {
+    var now = performance.now();
+    if (!force && now - staffLastDraw < 150) return;
+    staffLastDraw = now;
+    drawStaff();
+  }
+
+  function staveNotesFromMeasure(VF, measure, clef) {
+    var notes = [];
+    var src = (measure && measure.notes) ? measure.notes : [];
+    if (!src.length) {
+      notes.push(new VF.StaveNote({
+        clef: clef || 'treble',
+        keys: ['b/4'],
+        duration: 'wr'
+      }));
+      return notes;
+    }
+    for (var i = 0; i < src.length; i++) {
+      var n = src[i];
+      var sn = new VF.StaveNote({
+        clef: clef || 'treble',
+        keys: n.keys,
+        duration: n.duration
+      });
+      if (!n.rest && n.accidentals) {
+        for (var k = 0; k < n.accidentals.length; k++) {
+          if (n.accidentals[k]) {
+            sn.addModifier(new VF.Accidental(n.accidentals[k]), k);
+          }
+        }
+      }
+      if (!n.rest && n.ottava === '8vb') {
+        var ann = new VF.Annotation('8vb');
+        ann.setFont('sans-serif', 9, 'italic');
+        ann.setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM);
+        sn.addModifier(ann);
+      }
+      notes.push(sn);
+    }
+    return notes;
+  }
+
+  function drawStaff(eventList) {
+    if (!elStaff || !window.Score) return;
+    var VF = window.Vex && window.Vex.Flow;
+    if (!VF) return;
+
+    var events = eventList;
+    if (!events) events = (txEs && txEs.events) ? txEs.events : [];
+
+    var data = window.Score.eventsToScore(events, SCORE_OPTS);
+    var nMeas = Math.max(1, data.measures.length);
+    var innerW = (elStaffWrap && elStaffWrap.clientWidth) ? elStaffWrap.clientWidth : 358;
+    var staveW = Math.max(260, innerW - 12);
+    var rowH = 118;
+    var height = 16 + nMeas * rowH;
+    var width = staveW + 10;
+
+    elStaff.innerHTML = '';
+    try {
+      var renderer = new VF.Renderer(elStaff, VF.Renderer.Backends.SVG);
+      renderer.resize(width, height);
+      var ctx = renderer.getContext();
+
+      for (var m = 0; m < nMeas; m++) {
+        var y = 8 + m * rowH;
+        var stave = new VF.Stave(4, y, staveW);
+        if (m === 0) {
+          stave.addClef(data.clef).addTimeSignature(data.timeSigStr);
+        } else {
+          stave.addClef(data.clef);
+        }
+        stave.setContext(ctx).draw();
+
+        var tickables = staveNotesFromMeasure(VF, data.measures[m], data.clef);
+        var voice = new VF.Voice({ numBeats: 4, beatValue: 4 });
+        voice.setMode(VF.Voice.Mode.SOFT);
+        voice.addTickables(tickables);
+        var inner = staveW - (m === 0 ? 90 : 56);
+        if (inner < 80) inner = 80;
+        new VF.Formatter().joinVoices([voice]).format([voice], inner);
+        voice.draw(ctx, stave);
+      }
+    } catch (err) { /* un compás mal formado no tumba el detector */ }
+    if (elStaffWrap) elStaffWrap.scrollTop = elStaffWrap.scrollHeight;
+  }
+
+  try {
+    if (window.Vex && window.Vex.Flow && typeof window.Vex.Flow.setMusicFont === 'function') {
+      window.Vex.Flow.setMusicFont('Gonville');
+    }
+  } catch (eFont) { /* Gonville ya va embebida; si falla, default del bundle */ }
+
+  window.PianoStaff = { draw: drawStaff };
 
   // ---- Eventos ----
 
@@ -534,4 +687,5 @@ function beginTranscribe(mediaStream) {
   renderMidiStatus();
   renderOff();
   renderLog();
+  drawStaff([]);
 })();
