@@ -28,3 +28,5 @@ npm test                      # tests en Node, sin npm install
 ---
 
 Más proyectos: https://juliangdeveloper.github.io/
+
+Hecho con ❤️ y 🎼
