@@ -73,6 +73,7 @@ loadPianoEngine(ENGINE_ROOT).then(function (engine) {
   // 'score': C2–C7, para escribir. 'combat': C3–C6, el mismo criterio del juego.
   var session = engine.createCapture({
     profile: 'score',
+    maxVoices: 2,   // 1 es el default: una sola nota, igual que el perfil combat
     score: { bpm: 80, timeSig: '4/4', clef: 'treble' }
   });
   // Cada engine.HOP_MS, con el Float32 del AnalyserNode (fftSize 2048):
@@ -80,9 +81,11 @@ loadPianoEngine(ENGINE_ROOT).then(function (engine) {
     blocked: [{ midi: 60, until: performance.now() + 200 }]
   });
   // out.events: { type:'on'|'off', pitch:'E3', note:'E', octave:3, midi, cents,
-  //   source, sound, combat, fresh, released, t }
+  //   source, sound, combat, fresh, released, t, voices }
+  // voices: [{ pitch, note, octave, midi }, ...] notas que siguen sonando.
   // out.score.measures[].notes: { rest, pitch, note, octave, midi, midis, pitches,
-  //   duration, beats, beat, measure, ottava, accidentals }
+  //   duration, beats, beat, measure, ottava, accidentals, voices }
+  // pitch/note/octave/midi son la nota más grave. voices lista el acorde.
   // duration: w h q 8 16; el silencio lleva r (qr). MIDI < 48 trae ottava '8vb'.
   session.press('C4', 'key', performance.now());   // o session.press(60, 'midi', now)
   session.release('C4', 'key', performance.now());
@@ -99,6 +102,8 @@ loadPianoEngine(ENGINE_ROOT).then(function (engine) {
 `blocked` usa el mismo reloj que `now`. Mientras `now < until` no cuenta esa nota, el semitono vecino ni la octava (eco del altavoz).
 
 `sound` es false en el micrófono para no reinyectar la nota por el speaker. `combat` es true solo la primera vez que esa nota se pulsa, aunque llegue por otra fuente.
+
+`maxVoices` vale 1 si no se pasa. Con `2`, el micrófono puede sostener dos notas de piano a la vez (un bajo y una melodía, o un intervalo). Si la segunda no está clara, el motor se queda con una. Cada evento sigue trayendo su nota en `pitch` / `note` / `octave`; `voices` añade las que suenan juntas. En la partitura, `note` y `octave` son la más grave del acorde.
 
 También exporta `noteFromFreq`, `noteFromMidi`, `hzForNote`, `detectPitch`, `sessionType`, `denyMessage` y `statusLine`. Las notas de una interpretación salen de `hop`, `press` y `release`; `detectPitch` solo mide un buffer.
 

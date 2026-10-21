@@ -5,7 +5,7 @@
 
   var ENGINE_ROOT = 'https://juliangdeveloper.github.io/piano-transcribe/engine/v1/';
   var ENGINE_KEY = 'piano-transcribe.engine';
-  var APP_VERSION = '1.8.0';
+  var APP_VERSION = '1.9.0';
   var SCORE = { bpm: 80, timeSig: '4/4', clef: 'treble' };
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -77,37 +77,40 @@
   function renderOff() {
     elNote.textContent = '—';
     elNote.classList.add('off');
+    elNote.classList.remove('duo');
     elCents.style.left = '50%';
     elClarity.style.width = '0%';
     elNoteDb.textContent = '';
   }
 
-  function renderNote(note, clarity, freq, db) {
-    elNote.textContent = note.name + note.octave + ' · ' + latinName(note.name) + note.octave;
+  function showHeld(held, reading) {
+    if (!held || !held.length) { renderOff(); return; }
+    var list = held.slice().sort(function (a, b) { return a.midi - b.midi; });
+    elNote.textContent = list.map(function (h) {
+      return h.note + h.octave + ' · ' + latinName(h.note) + h.octave;
+    }).join('   ');
+    elNote.classList.toggle('duo', list.length > 1);
     elNote.classList.remove('off');
-    var cents = typeof note.cents === 'number' ? note.cents : 0;
-    elCents.style.left = ((cents + 50) / 100 * 100) + '%';
-    var cl = (typeof clarity === 'number') ? Math.max(0, Math.min(1, clarity)) : 1;
-    elClarity.style.width = (cl * 100) + '%';
-    elNoteDb.textContent = (typeof db === 'number' && isFinite(db)) ? Math.round(db) + 'dB' : '';
-    if (typeof freq === 'number' && isFinite(freq)) {
-      elFreq.textContent = Math.round(db || 0) + 'dB · ' + freq.toFixed(1) + ' Hz · claridad ' + Math.round(cl * 100) + '%';
-    }
-  }
-
-  function showEvent(ev, reading) {
-    if (!ev) { renderOff(); return; }
-    var cents = ev.cents || 0;
+    var primary = list[0];
+    var cents = 0;
     var clarity = 1;
     var freq = null;
     var db = null;
-    if (reading && reading.midi === ev.midi) {
+    if (reading && reading.midi === primary.midi) {
       if (typeof reading.cents === 'number') cents = reading.cents;
       if (typeof reading.clarity === 'number') clarity = reading.clarity;
       freq = reading.freq;
       db = reading.db;
     }
-    renderNote({ name: ev.note, octave: ev.octave, cents: cents }, clarity, freq, db);
+    elCents.style.left = ((cents + 50) / 100 * 100) + '%';
+    var cl = (typeof clarity === 'number') ? Math.max(0, Math.min(1, clarity)) : 1;
+    elClarity.style.width = (cl * 100) + '%';
+    elNoteDb.textContent = (typeof db === 'number' && isFinite(db)) ? Math.round(db) + 'dB' : '';
+    if (typeof freq === 'number' && isFinite(freq) && list.length === 1) {
+      elFreq.textContent = Math.round(db || 0) + 'dB · ' + freq.toFixed(1) + ' Hz · claridad ' + Math.round(cl * 100) + '%';
+    } else if (list.length > 1) {
+      elFreq.textContent = list.map(function (h) { return h.pitch; }).join(' + ');
+    }
   }
 
   function pushTranscriptRow(ev) {
@@ -125,7 +128,7 @@
   }
 
   function newSession() {
-    session = engine.createCapture({ profile: 'score', score: SCORE });
+    session = engine.createCapture({ profile: 'score', maxVoices: 2, score: SCORE });
     txEventCount = 0;
     elLog.classList.add('chrono');
     elLog.innerHTML = '';
@@ -260,15 +263,10 @@
     var i;
     for (i = 0; i < out.events.length; i++) {
       var ev = out.events[i];
-      if (ev.type === 'on') {
-        if (ev.fresh) pushTranscriptRow(ev);
-        showEvent(ev, out.reading);
-      } else if (ev.type === 'off' && ev.released) {
-        if (!out.held.length) renderOff();
-        else showEvent(out.held[out.held.length - 1], out.reading);
-      }
+      if (ev.type === 'on' && ev.fresh) pushTranscriptRow(ev);
     }
-    if (!out.events.length && out.held.length) showEvent(out.held[out.held.length - 1], out.reading);
+    if (out.held.length) showHeld(out.held, out.reading);
+    else if (out.events.length) renderOff();
     if (out.reading && now - teleAt >= 250 && !out.held.length) {
       teleAt = now;
       elFreq.textContent = Math.round(out.reading.db) + 'dB';
@@ -342,14 +340,14 @@
       if (on.events[0] && on.events[0].type === 'on') {
         var freq = null;
         try { freq = engine.hzForNote(on.events[0].note, on.events[0].octave); } catch (err) {}
-        showEvent(on.events[0], { midi: midiNum, cents: 0, clarity: 1, freq: freq, db: null });
+        showHeld(on.held, { midi: midiNum, cents: 0, clarity: 1, freq: freq, db: null });
         if (on.events[0].fresh) pushTranscriptRow(on.events[0]);
       }
     } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
       var off = session.release(midiNum, 'midi', now);
       if (off.events[0] && off.events[0].released) {
         if (!off.held.length) renderOff();
-        else showEvent(off.held[off.held.length - 1], null);
+        else showHeld(off.held, null);
       }
     }
     scheduleStaffRedraw(true);
@@ -378,7 +376,39 @@
     return { key: name + '/' + oct, accidental: name.length > 1 ? '#' : null };
   }
 
-  function staveNotesFromMeasure(VF, measure, clef) {
+  function restDuration(dur) {
+    if (!dur) return 'qr';
+    if (dur.charAt(dur.length - 1) === 'r') return dur;
+    return dur + 'r';
+  }
+
+  function measureMidis(measure) {
+    var out = [];
+    var src = (measure && measure.notes) ? measure.notes : [];
+    var i;
+    var k;
+    for (i = 0; i < src.length; i++) {
+      var n = src[i];
+      var midis = (n.midis && n.midis.length) ? n.midis : (n.midi != null ? [n.midi] : []);
+      for (k = 0; k < midis.length; k++) out.push(midis[k]);
+    }
+    return out;
+  }
+
+  function staffKind(midis) {
+    var low = false;
+    var high = false;
+    var i;
+    for (i = 0; i < midis.length; i++) {
+      if (midis[i] < 60) low = true;
+      else high = true;
+    }
+    if (low && high) return 'grand';
+    if (low) return 'bass';
+    return 'treble';
+  }
+
+  function staveNotesFromMeasure(VF, measure, clef, band) {
     var notes = [];
     var src = (measure && measure.notes) ? measure.notes : [];
     if (!src.length) {
@@ -390,28 +420,31 @@
       var n = src[i];
       var keys = [];
       var acc = [];
-      if (n.rest || n.midi == null) {
-        keys = ['b/4'];
-      } else {
-        var midis = (n.midis && n.midis.length) ? n.midis : [n.midi];
+      var sounding = !(n.rest || n.midi == null);
+      if (sounding) {
+        var midis = (n.midis && n.midis.length) ? n.midis.slice() : [n.midi];
+        midis.sort(function (a, b) { return a - b; });
         var k;
         for (k = 0; k < midis.length; k++) {
-          var sp = spellKey(midis[k], n.ottava);
+          if (band === 'low' && midis[k] >= 60) continue;
+          if (band === 'high' && midis[k] < 60) continue;
+          var sp = spellKey(midis[k], clef === 'treble' ? n.ottava : null);
           keys.push(sp.key);
           acc.push(sp.accidental);
         }
       }
+      var isRest = !keys.length;
       var sn = new VF.StaveNote({
         clef: clef || 'treble',
-        keys: keys,
-        duration: n.duration
+        keys: isRest ? ['b/4'] : keys,
+        duration: isRest ? restDuration(n.duration) : n.duration
       });
-      if (!n.rest && n.midi != null) {
+      if (!isRest) {
         var a;
         for (a = 0; a < acc.length; a++) {
           if (acc[a]) sn.addModifier(new VF.Accidental(acc[a]), a);
         }
-        if (n.ottava === '8vb') {
+        if (clef === 'treble' && n.ottava === '8vb') {
           var ann = new VF.Annotation('8vb');
           ann.setFont('sans-serif', 10, 'italic');
           ann.setVerticalJustification(VF.Annotation.VerticalJustify.TOP);
@@ -433,29 +466,55 @@
     var nMeas = Math.max(1, data.measures.length);
     var innerW = (elStaffWrap && elStaffWrap.clientWidth) ? elStaffWrap.clientWidth : 358;
     var staveW = Math.max(260, innerW - 12);
-    var rowH = 148;
-    var height = 24 + nMeas * rowH;
+    var kinds = [];
+    var m;
+    var height = 24;
+    for (m = 0; m < nMeas; m++) {
+      kinds[m] = staffKind(measureMidis(data.measures[m]));
+      height += kinds[m] === 'grand' ? 250 : 148;
+    }
     var width = staveW + 10;
     elStaff.innerHTML = '';
     try {
       var renderer = new VF.Renderer(elStaff, VF.Renderer.Backends.SVG);
       renderer.resize(width, height);
       var context = renderer.getContext();
-      var m;
+      var y = 18;
       for (m = 0; m < nMeas; m++) {
-        var y = 18 + m * rowH;
-        var stave = new VF.Stave(4, y, staveW);
-        if (m === 0) stave.addClef(data.clef).addTimeSignature(data.timeSigStr || '4/4');
-        else stave.addClef(data.clef);
-        stave.setContext(context).draw();
-        var tickables = staveNotesFromMeasure(VF, data.measures[m], data.clef);
-        var voice = new VF.Voice({ numBeats: 4, beatValue: 4 });
-        voice.setMode(VF.Voice.Mode.SOFT);
-        voice.addTickables(tickables);
+        var kind = kinds[m];
         var inner = staveW - (m === 0 ? 90 : 56);
         if (inner < 80) inner = 80;
-        new VF.Formatter().joinVoices([voice]).format([voice], inner);
-        voice.draw(context, stave);
+        if (kind === 'grand') {
+          var treble = new VF.Stave(4, y, staveW);
+          var bass = new VF.Stave(4, y + 108, staveW);
+          if (m === 0) treble.addClef('treble').addTimeSignature(data.timeSigStr || '4/4');
+          else treble.addClef('treble');
+          bass.addClef('bass');
+          treble.setContext(context).draw();
+          bass.setContext(context).draw();
+          var high = new VF.Voice({ numBeats: 4, beatValue: 4 });
+          var low = new VF.Voice({ numBeats: 4, beatValue: 4 });
+          high.setMode(VF.Voice.Mode.SOFT);
+          low.setMode(VF.Voice.Mode.SOFT);
+          high.addTickables(staveNotesFromMeasure(VF, data.measures[m], 'treble', 'high'));
+          low.addTickables(staveNotesFromMeasure(VF, data.measures[m], 'bass', 'low'));
+          new VF.Formatter().joinVoices([high, low]).format([high, low], inner);
+          high.draw(context, treble);
+          low.draw(context, bass);
+          y += 250;
+        } else {
+          var clef = kind === 'bass' ? 'bass' : (data.clef || 'treble');
+          var stave = new VF.Stave(4, y, staveW);
+          if (m === 0) stave.addClef(clef).addTimeSignature(data.timeSigStr || '4/4');
+          else stave.addClef(clef);
+          stave.setContext(context).draw();
+          var voice = new VF.Voice({ numBeats: 4, beatValue: 4 });
+          voice.setMode(VF.Voice.Mode.SOFT);
+          voice.addTickables(staveNotesFromMeasure(VF, data.measures[m], clef, 'all'));
+          new VF.Formatter().joinVoices([voice]).format([voice], inner);
+          voice.draw(context, stave);
+          y += 148;
+        }
       }
     } catch (err) {}
     if (elStaffWrap) elStaffWrap.scrollTop = elStaffWrap.scrollHeight;

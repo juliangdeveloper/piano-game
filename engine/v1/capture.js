@@ -178,7 +178,7 @@ function clarifyThresholdForMidi(midi, opts) {
 }
 
 var INTERFACE = 1;
-var VERSION = '1.8.0';
+var VERSION = '1.9.0';
 var HOP_MS = 20;
 
 var MIN_RUN = 2;
@@ -210,6 +210,10 @@ var DURATION_TABLE = [
   { type: '16', beats: 0.25, sixteenths: 1 }
 ];
 
+function blankVoice() {
+  return { midi: null, name: null, run: 0, gap: 0, candMidi: null, candName: null };
+}
+
 function createMicState() {
   return {
     heldMidi: null,
@@ -222,7 +226,8 @@ function createMicState() {
     lastDb: -120,
     floorDb: null,
     octRun: 0,
-    octMidi: null
+    octMidi: null,
+    slots: [blankVoice(), blankVoice()]
   };
 }
 
@@ -239,6 +244,7 @@ function resetMicState(st) {
   st.floorDb = null;
   st.octRun = 0;
   st.octMidi = null;
+  st.slots = [blankVoice(), blankVoice()];
 }
 
 function rmsDb(buffer) {
@@ -548,7 +554,9 @@ function eventsToScore(events, opts) {
     return e && typeof e.midi === 'number' && typeof e.tStartMs === 'number';
   }) : [];
   var items = [];
-  if (list.length) {
+  if (list.length && staggeredOverlap(list)) {
+    items = sliceItems(list, bpm);
+  } else if (list.length) {
     var groups = groupChords(list);
     var qMs = quarterMs(bpm);
     var restIgnore = qMs / 8;
@@ -598,6 +606,10 @@ function noteItem(group, q) {
     accidentals.push(sp.note.charAt(1) === '#' ? '#' : null);
     if (sp.midi < MIDI_8VB_BELOW) ottava = '8vb';
   }
+  var voices = [];
+  for (i = 0; i < midis.length; i++) {
+    voices.push({ pitch: pitches[i], note: notes[i], octave: octaves[i], midi: midis[i] });
+  }
   return {
     rest: false,
     duration: q.type,
@@ -611,7 +623,8 @@ function noteItem(group, q) {
     octave: octaves.length ? octaves[0] : null,
     octaves: octaves,
     accidentals: accidentals,
-    ottava: ottava
+    ottava: ottava,
+    voices: voices
   };
 }
 
@@ -629,8 +642,91 @@ function restItem(q) {
     octave: null,
     octaves: [],
     accidentals: [],
-    ottava: null
+    ottava: null,
+    voices: []
   };
+}
+
+function staggeredOverlap(events) {
+  var i;
+  var j;
+  for (i = 0; i < events.length; i++) {
+    for (j = i + 1; j < events.length; j++) {
+      var a = events[i];
+      var b = events[j];
+      var startGap = a.tStartMs - b.tStartMs;
+      if (startGap < 0) startGap = -startGap;
+      var overlap = (a.tEndMs < b.tEndMs ? a.tEndMs : b.tEndMs) - (a.tStartMs > b.tStartMs ? a.tStartMs : b.tStartMs);
+      if (startGap > CHORD_WINDOW_MS && overlap > CHORD_WINDOW_MS) return true;
+    }
+  }
+  return false;
+}
+
+function sameMidis(a, b) {
+  if (a.length !== b.length) return false;
+  var i;
+  for (i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function sliceItems(events, bpm) {
+  var times = [];
+  function addT(t) {
+    var i;
+    for (i = 0; i < times.length; i++) if (Math.abs(times[i] - t) < 1) return;
+    times.push(t);
+  }
+  var i;
+  var j;
+  var k;
+  for (i = 0; i < events.length; i++) {
+    addT(events[i].tStartMs);
+    addT(events[i].tEndMs);
+  }
+  times.sort(function (a, b) { return a - b; });
+  var slices = [];
+  for (i = 0; i < times.length - 1; i++) {
+    var t0 = times[i];
+    var t1 = times[i + 1];
+    if (t1 - t0 < 1) continue;
+    var midis = [];
+    for (j = 0; j < events.length; j++) {
+      var e = events[j];
+      if (e.tStartMs <= t0 + 1 && e.tEndMs + 1 >= t1) {
+        var seen = false;
+        for (k = 0; k < midis.length; k++) if (midis[k] === e.midi) seen = true;
+        if (!seen) midis.push(e.midi);
+      }
+    }
+    midis.sort(function (a, b) { return a - b; });
+    if (slices.length && sameMidis(slices[slices.length - 1].midis, midis)) {
+      slices[slices.length - 1].t1 = t1;
+    } else {
+      slices.push({ t0: t0, t1: t1, midis: midis });
+    }
+  }
+  var items = [];
+  for (i = 0; i < slices.length; i++) {
+    var sl = slices[i];
+    var dur = sl.t1 - sl.t0;
+    if (dur < CHORD_WINDOW_MS && sl.midis.length && i + 1 < slices.length) {
+      var nmid = slices[i + 1].midis.slice();
+      for (k = 0; k < sl.midis.length; k++) if (nmid.indexOf(sl.midis[k]) < 0) nmid.push(sl.midis[k]);
+      nmid.sort(function (a, b) { return a - b; });
+      slices[i + 1].midis = nmid;
+      slices[i + 1].t0 = sl.t0;
+      continue;
+    }
+    if (!sl.midis.length) {
+      if (dur >= quarterMs(bpm) / 8) items.push(restItem(quantizeDuration(dur, bpm)));
+      continue;
+    }
+    var group = { events: [] };
+    for (k = 0; k < sl.midis.length; k++) group.events.push({ midi: sl.midis[k] });
+    items.push(noteItem(group, quantizeDuration(dur, bpm)));
+  }
+  return items;
 }
 
 function packMeasures(items, cap) {
@@ -693,6 +789,289 @@ function statusLine(opts) {
   return base;
 }
 
+// --- dos voces: suma armónica, picos locales y un valle entre ellos ---
+// La segunda voz solo entra si no se explica como armónico de la primera.
+// Por debajo de C3 se deja la decisión al detector monofónico.
+
+var POLY_MIN_MIDI = 48;
+var SAL_W = [1, 0.65, 0.45, 0.32, 0.22, 0.15, 0.1, 0.07];
+var HANN = {};
+
+function hannWindow(n) {
+  if (HANN[n]) return HANN[n];
+  var w = new Float64Array(n);
+  var i;
+  for (i = 0; i < n; i++) w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
+  HANN[n] = w;
+  return w;
+}
+
+function fftInPlace(re, im) {
+  var n = re.length;
+  var i;
+  var j = 0;
+  for (i = 1; i < n; i++) {
+    var bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      var tr = re[i]; re[i] = re[j]; re[j] = tr;
+      var ti = im[i]; im[i] = im[j]; im[j] = ti;
+    }
+  }
+  var len;
+  for (len = 2; len <= n; len <<= 1) {
+    var ang = (-2 * Math.PI) / len;
+    var wr0 = Math.cos(ang);
+    var wi0 = Math.sin(ang);
+    var start;
+    for (start = 0; start < n; start += len) {
+      var wr = 1;
+      var wi = 0;
+      var k;
+      for (k = 0; k < len / 2; k++) {
+        var ur = re[start + k];
+        var ui = im[start + k];
+        var vr = re[start + k + len / 2] * wr - im[start + k + len / 2] * wi;
+        var vi = re[start + k + len / 2] * wi + im[start + k + len / 2] * wr;
+        re[start + k] = ur + vr;
+        im[start + k] = ui + vi;
+        re[start + k + len / 2] = ur - vr;
+        im[start + k + len / 2] = ui - vi;
+        var nwr = wr * wr0 - wi * wi0;
+        wi = wr * wi0 + wi * wr0;
+        wr = nwr;
+      }
+    }
+  }
+}
+
+function spectrumOf(buffer) {
+  var n = buffer ? buffer.length : 0;
+  var size = 4096;
+  if (n > 4096) size = 8192;
+  var re = new Float64Array(size);
+  var im = new Float64Array(size);
+  var w = hannWindow(n > size ? size : n);
+  var i;
+  var lim = n < size ? n : size;
+  if (n > 0 && n <= size) w = hannWindow(n);
+  for (i = 0; i < lim; i++) re[i] = buffer[i] * (i < w.length ? w[i] : 1);
+  fftInPlace(re, im);
+  var half = size >> 1;
+  var mag = new Float64Array(half);
+  for (i = 0; i < half; i++) mag[i] = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
+  return { mag: mag, size: size };
+}
+
+function peakNear(mag, freq, sampleRate, size) {
+  var binHz = sampleRate / size;
+  var center = Math.round(freq / binHz);
+  var rad = Math.max(1, Math.round(freq * 0.02 / binHz));
+  var lo = center - rad;
+  var hi = center + rad;
+  if (lo < 1) lo = 1;
+  if (hi > mag.length - 2) hi = mag.length - 2;
+  var best = 0;
+  var i;
+  for (i = lo; i <= hi; i++) if (mag[i] > best) best = mag[i];
+  return best;
+}
+
+function salienceAt(mag, midi, sampleRate, size) {
+  var f0 = hzForNote(NAMES[midi % 12], Math.floor(midi / 12) - 1);
+  if (!f0) return 0;
+  var s = 0;
+  var wsum = 0;
+  var fund = 0;
+  var h2 = 0;
+  var k;
+  for (k = 1; k <= 8; k++) {
+    var fk = k * f0 * Math.sqrt(1 + 0.00012 * k * k);
+    if (fk >= sampleRate * 0.47) break;
+    var p = peakNear(mag, fk, sampleRate, size);
+    if (k === 1) fund = p;
+    if (k === 2) h2 = p;
+    s += SAL_W[k - 1] * Math.sqrt(p);
+    wsum += SAL_W[k - 1];
+  }
+  if (!wsum) return 0;
+  var pen = 1;
+  if (h2 > 0 && fund < h2 * 0.35) pen = 0.15;
+  else if (h2 > 0 && fund < h2 * 0.62) pen = 0.45;
+  return (s / wsum) * pen;
+}
+
+function localPeaks(sal, minMidi, maxMidi) {
+  function at(m) {
+    if (m < minMidi || m > maxMidi) return 0;
+    return sal[m] || 0;
+  }
+  var ps = [];
+  var m;
+  for (m = minMidi; m <= maxMidi; m++) {
+    if (at(m) >= at(m - 1) && at(m) >= at(m + 1) &&
+        at(m) >= at(m - 2) && at(m) >= at(m + 2) && at(m) > 0) ps.push(m);
+  }
+  ps.sort(function (a, b) { return sal[b] - sal[a]; });
+  return ps;
+}
+
+function valleyRatio(sal, a, b) {
+  var lo = a < b ? a : b;
+  var hi = a < b ? b : a;
+  var m = Infinity;
+  var k;
+  for (k = lo + 1; k < hi; k++) if (sal[k] < m) m = sal[k];
+  if (m === Infinity) return 1;
+  var base = sal[a] < sal[b] ? sal[a] : sal[b];
+  if (base <= 0) return 1;
+  return m / base;
+}
+
+function spellDetected(midi) {
+  var n = noteFromMidi(midi);
+  if (!n) return null;
+  return {
+    midi: n.midi,
+    pitch: n.name + n.octave,
+    note: n.name,
+    octave: n.octave,
+    cents: 0,
+    clarity: null
+  };
+}
+
+function spectralView(buffer, sampleRate, cfg) {
+  var empty = { pair: [], top: null };
+  if (!buffer || buffer.length < 512 || !sampleRate) return empty;
+  var db = rmsDb(buffer);
+  if (db < cfg.gateDb) return empty;
+  var spec = spectrumOf(buffer);
+  var minMidi = cfg.minMidi > POLY_MIN_MIDI ? cfg.minMidi : POLY_MIN_MIDI;
+  var maxMidi = cfg.maxMidi < 96 ? cfg.maxMidi : 96;
+  if (maxMidi - minMidi < 3) return empty;
+  var sal = new Float64Array(128);
+  var m;
+  for (m = minMidi; m <= maxMidi; m++) sal[m] = salienceAt(spec.mag, m, sampleRate, spec.size);
+  var ps = localPeaks(sal, minMidi, maxMidi);
+  if (!ps.length || sal[ps[0]] <= 0) return empty;
+  var top = spellDetected(ps[0]);
+  var pair = [];
+  var i;
+  for (i = 1; i < ps.length && i < 6; i++) {
+    var iv = ps[i] - ps[0];
+    if (iv < 0) iv = -iv;
+    if (iv < 3) continue;
+    var ratio = sal[ps[i]] / sal[ps[0]];
+    var dip = valleyRatio(sal, ps[0], ps[i]);
+    var harmonic = iv === 12 || iv === 19 || iv === 24;
+    var ok = harmonic ? (ratio >= 0.82 && dip < 0.92) : (ratio >= 0.72 && dip <= 0.88);
+    if (!ok) continue;
+    var a = spellDetected(ps[0]);
+    var b = spellDetected(ps[i]);
+    if (!a || !b) break;
+    pair = a.midi < b.midi ? [a, b] : [b, a];
+    break;
+  }
+  return { pair: pair, top: top };
+}
+
+function trackVoices(slots, cands) {
+  var ons = [];
+  var offs = [];
+  var taken = [];
+  var matched = [];
+  var i;
+  var j;
+  for (i = 0; i < slots.length; i++) taken[i] = false;
+  for (j = 0; j < cands.length; j++) matched[j] = false;
+  for (j = 0; j < cands.length; j++) {
+    for (i = 0; i < slots.length; i++) {
+      if (taken[i] || slots[i].midi == null) continue;
+      if (slots[i].midi === cands[j].midi) {
+        slots[i].gap = 0;
+        slots[i].run = 0;
+        slots[i].candMidi = null;
+        taken[i] = true;
+        matched[j] = true;
+        break;
+      }
+    }
+  }
+  for (j = 0; j < cands.length; j++) {
+    if (matched[j]) continue;
+    var si = -1;
+    for (i = 0; i < slots.length; i++) {
+      if (taken[i] || slots[i].midi != null) continue;
+      si = i;
+      break;
+    }
+    if (si < 0) {
+      for (i = 0; i < slots.length; i++) {
+        if (taken[i] || slots[i].midi == null) continue;
+        si = i;
+        break;
+      }
+    }
+    if (si < 0) continue;
+    var slot = slots[si];
+    taken[si] = true;
+    var cand = cands[j];
+    if (slot.midi == null) {
+      if (slot.candMidi === cand.midi) slot.run += 1;
+      else {
+        slot.candMidi = cand.midi;
+        slot.candName = cand.pitch;
+        slot.run = 1;
+      }
+      if (slot.run >= MIN_RUN) {
+        slot.midi = cand.midi;
+        slot.name = cand.pitch;
+        slot.gap = 0;
+        slot.run = 0;
+        slot.candMidi = null;
+        ons.push(cand);
+      }
+    } else if (slot.midi !== cand.midi) {
+      if (slot.candMidi === cand.midi) slot.run += 1;
+      else {
+        slot.candMidi = cand.midi;
+        slot.candName = cand.pitch;
+        slot.run = 1;
+      }
+      if (slot.run >= MIN_RUN) {
+        offs.push(slot.name);
+        slot.midi = cand.midi;
+        slot.name = cand.pitch;
+        slot.gap = 0;
+        slot.run = 0;
+        slot.candMidi = null;
+        ons.push(cand);
+      }
+    }
+  }
+  for (i = 0; i < slots.length; i++) {
+    if (!taken[i] && slots[i].midi == null && slots[i].candMidi != null) {
+      slots[i].candMidi = null;
+      slots[i].candName = null;
+      slots[i].run = 0;
+    }
+    if (taken[i] || slots[i].midi == null) continue;
+    slots[i].gap += 1;
+    if (slots[i].gap >= RELEASE_GAPS) {
+      offs.push(slots[i].name);
+      slots[i].midi = null;
+      slots[i].name = null;
+      slots[i].gap = 0;
+      slots[i].run = 0;
+      slots[i].candMidi = null;
+      slots[i].candName = null;
+    }
+  }
+  return { on: ons, off: offs };
+}
+
 function createCapture(options) {
   options = options || {};
   var profile = PROFILES[options.profile] || PROFILES.score;
@@ -707,7 +1086,8 @@ function createCapture(options) {
     a4: (typeof options.a4 === 'number' && options.a4 > 0) ? options.a4 : 440,
     bpm: options.score && options.score.bpm ? options.score.bpm : DEFAULT_BPM,
     timeSig: options.score && options.score.timeSig ? options.score.timeSig : '4/4',
-    clef: options.score && options.score.clef ? options.score.clef : 'treble'
+    clef: options.score && options.score.clef ? options.score.clef : 'treble',
+    maxVoices: options.maxVoices >= 2 ? 2 : 1
   };
   var mic = createMicState();
   var heldMap = {};
@@ -750,7 +1130,20 @@ function createCapture(options) {
   }
 
   function pack(list, reading) {
-    return { events: list, held: heldList(), score: buildScore(), reading: reading || null };
+    var held = heldList();
+    var voices = [];
+    var i;
+    for (i = 0; i < held.length; i++) {
+      voices.push({
+        pitch: held[i].pitch,
+        note: held[i].note,
+        octave: held[i].octave,
+        midi: held[i].midi
+      });
+    }
+    voices.sort(function (a, b) { return a.midi - b.midi; });
+    for (i = 0; i < list.length; i++) list[i].voices = voices;
+    return { events: list, held: held, score: buildScore(), reading: reading || null };
   }
 
   function touchOpen(t) {
@@ -883,32 +1276,90 @@ function createCapture(options) {
     return { events: out, held: [], score: eventsToScore([], scoreOpts()), reading: null };
   }
 
+  function emitEdges(out, edge, t, extra) {
+    var i;
+    if (edge.off) {
+      for (i = 0; i < edge.off.length; i++) {
+        var offMerged = mergeRelease(heldMap, edge.off[i], 'mic');
+        var offEv = applyEdge('off', edge.off[i], 'mic', t, offMerged, null);
+        if (offEv) out.push(offEv);
+      }
+    }
+    if (edge.on) {
+      for (i = 0; i < edge.on.length; i++) {
+        var cand = edge.on[i];
+        var onMerged = mergePress(heldMap, cand.pitch, 'mic');
+        var onEv = applyEdge('on', cand.pitch, 'mic', t, onMerged, {
+          cents: cand.cents || 0,
+          clarity: cand.clarity
+        });
+        if (onEv) out.push(onEv);
+      }
+    }
+    if (extra && extra.off) {
+      var offMerged2 = mergeRelease(heldMap, extra.off, 'mic');
+      var offEv2 = applyEdge('off', extra.off, 'mic', t, offMerged2, null);
+      if (offEv2) out.push(offEv2);
+    }
+    if (extra && extra.on) {
+      var onMerged2 = mergePress(heldMap, extra.on, 'mic');
+      var onEv2 = applyEdge('on', extra.on, 'mic', t, onMerged2, extra);
+      if (onEv2) out.push(onEv2);
+    }
+  }
+
   function hop(buffer, sampleRate, nowMs, hopOpts) {
     hopOpts = hopOpts || {};
     var t = rel(nowMs);
-    var obs = observeMic(mic, buffer, sampleRate || 48000, cfg);
-    var midi = obs.midi;
-    var pitch = obs.pitch;
-    if (pitch && isBlocked(hopOpts.blocked, midi, nowMs)) {
-      midi = null;
-      pitch = null;
-      if (obs.reading) obs.reading.accepted = false;
+    var sr = sampleRate || 48000;
+    if (cfg.maxVoices < 2) {
+      var obs1 = observeMic(mic, buffer, sr, cfg);
+      var midi = obs1.midi;
+      var pitch = obs1.pitch;
+      if (pitch && isBlocked(hopOpts.blocked, midi, nowMs)) {
+        midi = null;
+        pitch = null;
+        if (obs1.reading) obs1.reading.accepted = false;
+      }
+      var mono = hopMachine(mic, { midi: pitch ? midi : null, pitch: pitch });
+      var monoOut = [];
+      emitEdges(monoOut, { on: [], off: [] }, t, {
+        off: mono.off,
+        on: mono.on,
+        cents: obs1.cents || (obs1.reading && obs1.reading.cents) || 0,
+        clarity: obs1.clarity || (obs1.reading && obs1.reading.clarity) || null
+      });
+      touchOpen(t);
+      return pack(monoOut, obs1.reading);
     }
-    var edge = hopMachine(mic, { midi: pitch ? midi : null, pitch: pitch });
-    var out = [];
-    if (edge.off) {
-      var offMerged = mergeRelease(heldMap, edge.off, 'mic');
-      var offEv = applyEdge('off', edge.off, 'mic', t, offMerged, null);
-      if (offEv) out.push(offEv);
+    var view = spectralView(buffer, sr, cfg);
+    var obs = observeMic(mic, buffer, sr, cfg);
+    var cands = [];
+    var pi;
+    if (view.pair.length >= 2) {
+      mic.votes = [];
+      for (pi = 0; pi < view.pair.length; pi++) {
+        if (!isBlocked(hopOpts.blocked, view.pair[pi].midi, nowMs)) cands.push(view.pair[pi]);
+      }
+      if (cands.length < 2) cands = [];
     }
-    if (edge.on) {
-      var onMerged = mergePress(heldMap, edge.on, 'mic');
-      var onEv = applyEdge('on', edge.on, 'mic', t, onMerged, {
+    if (!cands.length && obs.midi != null && obs.pitch && !isBlocked(hopOpts.blocked, obs.midi, nowMs)) {
+      cands.push({
+        midi: obs.midi,
+        pitch: obs.pitch,
+        note: obs.reading && obs.reading.note,
+        octave: obs.reading && obs.reading.octave,
         cents: obs.cents || (obs.reading && obs.reading.cents) || 0,
         clarity: obs.clarity || (obs.reading && obs.reading.clarity) || null
       });
-      if (onEv) out.push(onEv);
+    } else if (!cands.length && view.top && !isBlocked(hopOpts.blocked, view.top.midi, nowMs)) {
+      for (pi = 0; pi < mic.slots.length; pi++) {
+        if (mic.slots[pi].midi === view.top.midi) cands.push(view.top);
+      }
     }
+    var edge = trackVoices(mic.slots, cands);
+    var out = [];
+    emitEdges(out, edge, t, null);
     touchOpen(t);
     return pack(out, obs.reading);
   }

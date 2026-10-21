@@ -143,7 +143,7 @@
     }
     #staffWrap {
       overflow: auto;
-      max-height: 32vh;
+      max-height: 46vh;
       min-height: 128px;
       -webkit-overflow-scrolling: touch;
     }
@@ -160,6 +160,11 @@
       letter-spacing: -2px;
       text-align: center;
       font-variant-numeric: tabular-nums;
+    }
+    #noteDisplay.duo {
+      font-size: clamp(26px, 7.2vw, 40px);
+      letter-spacing: -1px;
+      line-height: 1.15;
     }
     #noteDisplay.off { color: #3a4250; }
     #noteDb {
@@ -375,7 +380,7 @@
     <span id="version"></span>
   </footer>
 
-  <script src="js/vexflow.js?v=1.8.0"></script>
-  <script src="js/app.js?v=1.8.0"></script>
+  <script src="js/vexflow.js?v=1.9.0"></script>
+  <script src="js/app.js?v=1.9.0"></script>
 </body>
 </html>

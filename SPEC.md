@@ -8,7 +8,7 @@ Partitura en vivo. Sin build. La página es un cliente del motor público: lo ca
 - `version.txt`: una línea con la versión. Se pide con `cache: 'no-store'`.
 - `capture.js?v=<versión>`: módulo ES. Sin DOM, sin `window`, sin VexFlow, sin dependencias.
 - Contrato: `INTERFACE === 1`. Exporta `createCapture`, `detectPitch`, `noteFromFreq`, `noteFromMidi`, `hzForNote`, `sessionType`, `denyMessage`, `statusLine`, `HOP_MS` (20) y `VERSION`.
-- `createCapture({ profile, score })`. `score` (default): C2–C7. `combat`: C3–C6, el mismo criterio de piano-magic. `score: { bpm, timeSig, clef }` default 80, 4/4, treble.
+- `createCapture({ profile, maxVoices, score })`. `score` (default): C2–C7. `combat`: C3–C6, el mismo criterio de piano-magic. `maxVoices` default 1; `2` permite un intervalo o un bajo sostenido bajo otra nota, desde C3. `score: { bpm, timeSig, clef }` default 80, 4/4, treble.
 - `hop(buffer, sampleRate, nowMs, { blocked })` una vez por `HOP_MS`, con el `Float32Array` del `AnalyserNode` (`fftSize` 2048). La detección no sale del dispositivo.
 - `press` / `release` / `advance` / `releaseSource` / `reset` / `score` / `held`.
 - Evento: `{ type:'on'|'off', pitch, note, octave, midi, source, sound, combat, fresh, released, t }`.

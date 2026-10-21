@@ -19,6 +19,7 @@ test('la interfaz carga /engine/v1/ y no los archivos internos', () => {
   assert.ok(app.includes("cache: 'no-store'"));
   assert.ok(app.includes('mod.INTERFACE !== 1'));
   assert.ok(app.includes('profile: \'score\''));
+  assert.ok(app.includes('maxVoices: 2'));
   assert.equal(/from\s+['"][^'"]*engine/.test(app), false);
   assert.equal(/js\/pitch\.js/.test(app), false);
   assert.equal(/window\.Pitch/.test(app), false);
@@ -27,8 +28,8 @@ test('la interfaz carga /engine/v1/ y no los archivos internos', () => {
   assert.equal(/js\/pitch\.js/.test(html), false);
   assert.equal(/js\/score\.js/.test(html), false);
   assert.equal(/js\/gate\.js/.test(html), false);
-  assert.ok(html.includes('js/vexflow.js?v=1.8.0'));
-  assert.ok(html.includes('js/app.js?v=1.8.0'));
+  assert.ok(html.includes('js/vexflow.js?v=1.9.0'));
+  assert.ok(html.includes('js/app.js?v=1.9.0'));
   assert.ok(html.includes('piano-transcribe'));
   assert.ok(readme.includes(url));
   assert.ok(readme.includes('capture.js?v='));
