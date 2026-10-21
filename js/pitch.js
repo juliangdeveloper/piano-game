@@ -35,6 +35,10 @@
 
     var n = Math.min(buffer.length, WINDOW_SIZE);
     var maxLag = Math.min(MAX_LAG, Math.floor(n / 2));
+    // Tope de lag: el rango de combate no busca C2. Sin tope se queda MAX_LAG.
+    if (typeof opts.maxLag === 'number' && isFinite(opts.maxLag) && opts.maxLag > TAU_MIN) {
+      maxLag = Math.min(maxLag, Math.floor(opts.maxLag));
+    }
 
     // Señal sin energía (ceros, silencio) → sin tono
     var energy = 0;
@@ -85,6 +89,25 @@
     }
 
     if (bestTau < 0) return { freq: null, clarity: 0 };
+
+    // Corrección de octava. Si el valle elegido es un múltiplo del periodo real
+    // (subarmónico: la nota suena una octava abajo), baja a τ/k cuando ese valle
+    // es casi igual de profundo. En graves del piano la fundamental es débil y
+    // el argmin global caía en 2T (E3→E2, D4→D3).
+    var k, sub, j, lo, hi, m, mv;
+    for (k = 4; k >= 2; k--) {
+      sub = bestTau / k;
+      if (sub < TAU_MIN + 1) continue;
+      lo = Math.max(TAU_MIN, Math.floor(sub) - 2);
+      hi = Math.min(maxLag - 1, Math.ceil(sub) + 2);
+      m = -1; mv = Infinity;
+      for (j = lo; j <= hi; j++) if (dp[j] < mv) { mv = dp[j]; m = j; }
+      if (m > TAU_MIN && dp[m] <= dp[m - 1] && dp[m] <= dp[m + 1] &&
+          mv < Math.max(YIN_THRESHOLD * 2, bestDp * 1.6 + 0.06)) {
+        bestTau = m; bestDp = mv;
+        break;
+      }
+    }
 
     // Refinamiento parabólico con vecinos de d'(tau)
     var refinedTau = bestTau;

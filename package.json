@@ -1,6 +1,6 @@
 {
-  "name": "piano-game",
-  "version": "1.0.0",
+  "name": "piano-transcribe",
+  "version": "1.8.0",
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.js"

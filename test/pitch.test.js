@@ -175,6 +175,40 @@ test('13: roundtrip noteFromMidi ↔ noteFromFreq en todo el rango MIDI', () => 
   }
 });
 
+test('15: piano E3 y D4 no caen una octava (fundamental débil)', () => {
+  function tone(freq) {
+    const buf = new Float32Array(4096);
+    const amps = [1, 0.5, 0.25, 0.12];
+    for (let i = 0; i < buf.length; i++) {
+      const t = i / 48000;
+      let s = 0;
+      for (let k = 0; k < amps.length; k++) s += amps[k] * Math.sin(TAU * freq * (k + 1) * t);
+      buf[i] = s;
+    }
+    return buf;
+  }
+  const e3hz = Pitch.hzForNote('E', 3);
+  const d4hz = Pitch.hzForNote('D', 4);
+  const e3 = Pitch.detectPitch(tone(e3hz), 48000);
+  const d4 = Pitch.detectPitch(tone(d4hz), 48000, { maxLag: 400 });
+  const e3n = Pitch.noteFromFreq(e3.freq);
+  const d4n = Pitch.noteFromFreq(d4.freq);
+  assert.strictEqual(e3n.name + e3n.octave, 'E3');
+  assert.ok(Math.abs(e3.freq - e3hz) < 2, 'E3 freq=' + e3.freq);
+  assert.strictEqual(d4n.name + d4n.octave, 'D4');
+  assert.ok(Math.abs(d4.freq - d4hz) < 2, 'D4 freq=' + d4.freq);
+});
+
+test('16: maxLag acota la búsqueda y un seno E2 sigue siendo E2', () => {
+  const e2hz = Pitch.hzForNote('E', 2);
+  const full = Pitch.detectPitch(sine(e2hz, 48000), 48000);
+  assert.strictEqual(Pitch.noteFromFreq(full.freq).octave, 2);
+  const capped = Pitch.detectPitch(sine(261.6256, 44100), 44100, { maxLag: 420 });
+  const note = Pitch.noteFromFreq(capped.freq);
+  assert.strictEqual(note.name, 'C');
+  assert.strictEqual(note.octave, 4);
+});
+
 test('14: clarifyThresholdForMidi — 0.90 graves/C5-, 0.78 agudos C5+ (rolloff de speaker)', () => {
   assert.strictEqual(Pitch.clarifyThresholdForMidi(48), 0.90); // C3
   assert.strictEqual(Pitch.clarifyThresholdForMidi(71), 0.90); // B4: aún estricto
