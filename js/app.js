@@ -1,28 +1,17 @@
-/* piano-game — app.js: micrófono, AudioContext, AnalyserNode y loop de render.
-   Depende de window.Pitch (js/pitch.js). Sin dependencias, sin red. */
+/* piano-transcribe — cliente del motor público /engine/v1/.
+   Carga el mismo URL que cualquier otro proyecto. Dibuja la partitura con VexFlow. */
 (function () {
   'use strict';
 
-  // ---- Constantes (SPEC R2, R4, R6) ----
-  var A4 = 440;
-  var CLARITY_THRESHOLD = 0.90;
-  var STABLE_FRAMES = 3;
-  var MIDI_MIN = 36; // C2
-  var MIDI_MAX = 96; // C7
-  var FRAME_SKIP = 2; // procesar cada 2 frames de rAF (~30 Hz)
-  var LOG_MAX = 8;
-  var VERSION = 'v1.7.1';
+  var ENGINE_ROOT = 'https://juliangdeveloper.github.io/piano-transcribe/engine/v1/';
+  var ENGINE_KEY = 'piano-transcribe.engine';
+  var APP_VERSION = '1.8.0';
+  var SCORE = { bpm: 80, timeSig: '4/4', clef: 'treble' };
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
-  var LS_KEY = 'piano-game.source'; // R12: persistencia de la fuente elegida
-  // R14: transcripción
-  var TX_HOP = 1024;          // muestras por hop (~21ms @48k)
-  var TX_RING_SEC = 60;       // R14: memoria de 60s
-  var TX_TICK_MS = 200;       // R18: ticker del procesador
-  var TX_VOICE = 0.6;         // R15: umbral nota sola
-  var TX_CHORD = 0.45;        // R15: umbral acorde
-  var TX_GATE_DB = -50;       // R19: gate — debajo de esto es silencio/ruido de fondo
+  var NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  var LS_KEY = 'piano-transcribe.source';
+  var LS_KEY_OLD = 'piano-game.source';
 
-  // ---- DOM ----
   var elBtn = document.getElementById('btnToggle');
   var elNote = document.getElementById('noteDisplay');
   var elNoteDb = document.getElementById('noteDb');
@@ -35,52 +24,54 @@
   var elSettings = document.getElementById('settings');
   var elBtnSettings = document.getElementById('btnSettings');
   var elMidiStatus = document.getElementById('midiStatus');
-  var sourceMode = 'mic'; // R11: 'mic' | 'midi' | 'line' | 'transcribe'
-  var midiAccess = null;  // R11: acceso Web MIDI (solo modo midi)
-  var midiInputName = '';
-  // R14: estado del modo transcripción
-  var txEs = null;        // EventStream
-  var txSessionStart = 0; // performance.now() al iniciar sesión
-  var txLastNoteIdx = 0;  // último eventIdx mostrado en la lista
-  var txGateOpen = false; // R19: estado del gate (histéresis)
-  var txLastRms = 0;      // RMS del frame anterior (score de re-ataque)
-  var txEventCount = 0;   // filas de la lista en la sesión
-  var txPeakMidi = -1;    // v1.6.6: midi de la candidata con peak en curso
-  var txPeakDb = -Infinity; // v1.6.6: pico dB del ataque de la candidata
-  var txGateThresholdDb = TX_GATE_DB; // umbral del gate (calibrado al arranque)
-  var txPendingGroup = null; // R20: agrupación de notas con onset simultáneo
-  // R20: partitura en vivo (EventStream → Score → VexFlow)
-  var SCORE_OPTS = { bpm: 80, timeSig: '4/4', clef: 'treble' };
   var elStaff = document.getElementById('staff');
   var elStaffWrap = document.getElementById('staffWrap');
-  var staffLastDraw = 0;
-  var midiHeld = {};     // midi → true, para hops de la partitura en modo MIDI
-  var midiTickId = 0;
+  var elVersion = document.getElementById('version');
 
-  // ---- Estado ----
+  var engine = null;
+  var session = null;
+  var sourceMode = 'mic';
+  var midiAccess = null;
+  var midiInputName = '';
   var ctx = null;
   var analyser = null;
   var buf = null;
   var stream = null;
-  var rafId = 0;
-  var frameCount = 0;
+  var hopTimer = 0;
   var running = false;
+  var txEventCount = 0;
+  var staffLastDraw = 0;
+  var teleAt = 0;
+  var silentTicks = 0;
 
-  var stableNote = null;      // nota estable actual: {name, octave, cents, midi}
-  var holdState = null;       // máquina de estados R4+R10 (window.Hold)
-  var lastFreq = null;        // última medición real (para render durante hold)
-  var lastClarity = 0;
-  var logEntries = [];        // últimas 8 notas estables (R7)
-
-  // ---- Utilidades ----
-
-  function latinName(name) {
-    var idx = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].indexOf(name);
-    return idx >= 0 ? LATIN[idx] : name;
+  function loadPianoEngine(root) {
+    return fetch(root + 'version.txt?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('version');
+        return res.text();
+      })
+      .then(function (text) {
+        var version = text.trim();
+        try { localStorage.setItem(ENGINE_KEY, version); } catch (e) {}
+        return import(root + 'capture.js?v=' + encodeURIComponent(version));
+      })
+      .catch(function () {
+        var version = '';
+        try { version = localStorage.getItem(ENGINE_KEY) || ''; } catch (e) {}
+        var url = root + 'capture.js' + (version ? ('?v=' + encodeURIComponent(version)) : '');
+        return import(url);
+      })
+      .then(function (mod) {
+        if (!mod || mod.INTERFACE !== 1 || typeof mod.createCapture !== 'function') {
+          throw new Error('interface');
+        }
+        return mod;
+      });
   }
 
-  function noteLabel(note) {
-    return note.name + note.octave + ' · ' + latinName(note.name) + note.octave;
+  function latinName(name) {
+    var idx = NAMES.indexOf(name);
+    return idx >= 0 ? LATIN[idx] : name;
   }
 
   function renderOff() {
@@ -88,77 +79,71 @@
     elNote.classList.add('off');
     elCents.style.left = '50%';
     elClarity.style.width = '0%';
-    elFreq.textContent = '';
+    elNoteDb.textContent = '';
   }
 
   function renderNote(note, clarity, freq, db) {
-    elNote.textContent = noteLabel(note);
+    elNote.textContent = note.name + note.octave + ' · ' + latinName(note.name) + note.octave;
     elNote.classList.remove('off');
-    // cents −50..+50 → posición 0..100%
-    var pct = (note.cents + 50) / 100 * 100;
-    elCents.style.left = pct + '%';
-    var cl = Math.max(0, Math.min(1, clarity));
+    var cents = typeof note.cents === 'number' ? note.cents : 0;
+    elCents.style.left = ((cents + 50) / 100 * 100) + '%';
+    var cl = (typeof clarity === 'number') ? Math.max(0, Math.min(1, clarity)) : 1;
     elClarity.style.width = (cl * 100) + '%';
-    // v1.6.3: dB del frame de captura, pegado al display
-    elNoteDb.textContent = (typeof db === 'number')
-      ? Math.round(db) + 'dB'
-      : '';
-    // v1.3.1: la línea de Hz es telemetría (el loop la actualiza cada frame con
-    // dB+Hz+claridad). Solo la limpiamos al detener/reset, no aquí.
-  }
-
-  function renderLog() {
-    elLog.innerHTML = '';
-    for (var i = 0; i < logEntries.length; i++) {
-      var li = document.createElement('li');
-      li.textContent = logEntries[i];
-      elLog.appendChild(li);
+    elNoteDb.textContent = (typeof db === 'number' && isFinite(db)) ? Math.round(db) + 'dB' : '';
+    if (typeof freq === 'number' && isFinite(freq)) {
+      elFreq.textContent = Math.round(db || 0) + 'dB · ' + freq.toFixed(1) + ' Hz · claridad ' + Math.round(cl * 100) + '%';
     }
   }
 
-  function pushLog(note) {
-    var label = noteLabel(note);
-    logEntries.push(label);
-    if (logEntries.length > LOG_MAX) {
-      logEntries = logEntries.slice(-LOG_MAX);
+  function showEvent(ev, reading) {
+    if (!ev) { renderOff(); return; }
+    var cents = ev.cents || 0;
+    var clarity = 1;
+    var freq = null;
+    var db = null;
+    if (reading && reading.midi === ev.midi) {
+      if (typeof reading.cents === 'number') cents = reading.cents;
+      if (typeof reading.clarity === 'number') clarity = reading.clarity;
+      freq = reading.freq;
+      db = reading.db;
     }
-    renderLog();
+    renderNote({ name: ev.note, octave: ev.octave, cents: cents }, clarity, freq, db);
+  }
+
+  function pushTranscriptRow(ev) {
+    txEventCount++;
+    var li = document.createElement('li');
+    li.textContent = '#' + txEventCount + ' ' + ev.note + ev.octave + ' · ' +
+      latinName(ev.note) + ev.octave + ' · +' + (ev.t / 1000).toFixed(1) + 's';
+    elLog.appendChild(li);
+    while (elLog.children.length > 500) elLog.removeChild(elLog.firstChild);
   }
 
   function updateBadge() {
-    if (ctx && ctx.state === 'suspended') {
-      elBadge.classList.add('visible');
-    } else {
-      elBadge.classList.remove('visible');
-    }
+    if (ctx && ctx.state === 'suspended') elBadge.classList.add('visible');
+    else elBadge.classList.remove('visible');
   }
 
-  function resetDetection() {
-    holdState = window.Hold.createState();
-    stableNote = null;
-    lastFreq = null;
-    lastClarity = 0;
-    renderOff();
-    elFreq.textContent = '';
-    // R3/R7: fuera de rango NO borra el log; aquí tampoco.
+  function newSession() {
+    session = engine.createCapture({ profile: 'score', score: SCORE });
+    txEventCount = 0;
+    elLog.classList.add('chrono');
+    elLog.innerHTML = '';
+    drawStaff();
   }
 
-  // ---- Start / Stop ----
+  function stopTimers() {
+    if (hopTimer) { clearInterval(hopTimer); hopTimer = 0; }
+  }
 
   function stop() {
     running = false;
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = 0;
-    }
-    stopTranscribe(); // R14: limpiar ticker + script processor
-    // R11: limpiar MIDI (handlers y acceso)
+    stopTimers();
+    silentTicks = 0;
     if (midiAccess) {
       midiAccess.onstatechange = null;
       var inputs = midiAccess.inputs.values();
-      for (var it = inputs.next(); !it.done; it = inputs.next()) {
-        it.value.onmidimessage = null;
-      }
+      for (var it = inputs.next(); !it.done; it = inputs.next()) it.value.onmidimessage = null;
       midiAccess = null;
     }
     midiInputName = '';
@@ -167,67 +152,129 @@
       stream.getTracks().forEach(function (t) { t.stop(); });
       stream = null;
     }
-    if (ctx) {
-      // intentar cerrar el contexto para liberar recursos
-      if (typeof ctx.close === 'function') {
-        try { ctx.close(); } catch (e) { /* noop */ }
-      }
-      ctx = null;
-      analyser = null;
-      buf = null;
+    if (ctx && typeof ctx.close === 'function') {
+      try { ctx.close(); } catch (e) {}
     }
-    resetDetection(); // display '—' SIN borrar el log (R7)
-    if (midiTickId) { clearInterval(midiTickId); midiTickId = 0; }
-    midiHeld = {};
-    scheduleStaffRedraw(true); // R20: al parar, la partitura se queda
+    ctx = null;
+    analyser = null;
+    buf = null;
+    renderOff();
+    elFreq.textContent = '';
+    elLog.classList.remove('chrono');
+    elLog.innerHTML = '';
+    txEventCount = 0;
+    drawStaff();
     elBtn.textContent = 'Escuchar';
     elBtn.classList.remove('listening');
-    elHint.textContent = (sourceMode === 'midi')
+    elHint.textContent = sourceMode === 'midi'
       ? 'Conecta el piano por USB o Bluetooth MIDI y toca Escuchar'
-      : 'Toca notas: todas quedan en la lista, en orden';
+      : 'Toca notas: se escriben en la partitura';
     renderSettingsVisibility();
     updateBadge();
   }
 
   function start() {
-    // R14: la transcripción corre SIEMPRE sobre la entrada de mic (no es modo aparte);
-    // 'line' comparte el mismo pipeline con preamp ×1.
-    if (sourceMode === 'midi') {
-      startMidi();
-      return;
-    }
+    if (!engine) return;
+    if (sourceMode === 'midi') { startMidi(); return; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       elHint.textContent = 'Micrófono no disponible en este navegador';
+      running = false;
       return;
     }
-    // R5: AudioContext creado dentro del gesto del usuario
     var AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) {
       elHint.textContent = 'Web Audio no soportado';
+      running = false;
       return;
     }
     ctx = new AC();
     updateBadge();
-
     navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false
-      }
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     }).then(function (mediaStream) {
-      if (!running) { // ya se paró mientras llegaba el permiso
+      if (!running) {
         mediaStream.getTracks().forEach(function (t) { t.stop(); });
         return;
       }
-      beginTranscribe(mediaStream); // R14: transcripción SIEMPRE sobre el mic
+      beginMic(mediaStream);
     }).catch(function (err) {
       stop();
       elHint.textContent = 'Permiso de micrófono denegado: ' + (err && err.name ? err.name : 'error');
     });
   }
 
-  // ---- R11: modo MIDI — eventos discretos, sin mic ni YIN ----
+  function beginMic(mediaStream) {
+    stream = mediaStream;
+    newSession();
+    var source = ctx.createMediaStreamSource(stream);
+    var hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 60;
+    hp.Q.value = 0.707;
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 4000;
+    lp.Q.value = 0.707;
+    var preamp = ctx.createGain();
+    preamp.gain.value = (sourceMode === 'line') ? 1 : 4;
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0;
+    buf = new Float32Array(analyser.fftSize);
+    var mute = ctx.createGain();
+    mute.gain.value = 0;
+    source.connect(hp);
+    hp.connect(lp);
+    lp.connect(preamp);
+    preamp.connect(analyser);
+    analyser.connect(mute);
+    mute.connect(ctx.destination);
+    if (ctx.state === 'suspended') ctx.resume().then(updateBadge).catch(updateBadge);
+    elBtn.textContent = 'Parar';
+    elBtn.classList.add('listening');
+    elHint.textContent = 'Toca: las notas se escriben en el pentagrama';
+    renderMidiStatus();
+    hopTimer = setInterval(micHop, engine.HOP_MS);
+  }
+
+  function bufferIsSilent() {
+    var i;
+    for (i = 0; i < buf.length; i += 16) if (buf[i] !== 0) return false;
+    return true;
+  }
+
+  function micHop() {
+    if (!running || !session || !analyser || !buf) return;
+    updateBadge();
+    try { analyser.getFloatTimeDomainData(buf); } catch (e) { return; }
+    if (bufferIsSilent()) {
+      silentTicks += 1;
+      if (silentTicks > 30 && ctx && ctx.state !== 'running') {
+        try { ctx.resume(); } catch (e2) {}
+      }
+      return;
+    }
+    silentTicks = 0;
+    var now = performance.now();
+    var out = session.hop(buf, ctx.sampleRate || 48000, now);
+    var i;
+    for (i = 0; i < out.events.length; i++) {
+      var ev = out.events[i];
+      if (ev.type === 'on') {
+        if (ev.fresh) pushTranscriptRow(ev);
+        showEvent(ev, out.reading);
+      } else if (ev.type === 'off' && ev.released) {
+        if (!out.held.length) renderOff();
+        else showEvent(out.held[out.held.length - 1], out.reading);
+      }
+    }
+    if (!out.events.length && out.held.length) showEvent(out.held[out.held.length - 1], out.reading);
+    if (out.reading && now - teleAt >= 250 && !out.held.length) {
+      teleAt = now;
+      elFreq.textContent = Math.round(out.reading.db) + 'dB';
+    }
+    scheduleStaffRedraw();
+  }
 
   function startMidi() {
     if (!navigator.requestMIDIAccess) {
@@ -236,7 +283,7 @@
       return;
     }
     navigator.requestMIDIAccess({ sysex: false }).then(function (access) {
-      if (!running) return; // se paró mientras llegaba el permiso
+      if (!running) return;
       midiAccess = access;
       var input = pickMidiInput(access);
       if (!input) {
@@ -245,12 +292,8 @@
         return;
       }
       midiInputName = input.name || 'MIDI';
-      beginScoreSession(20);
-      midiHeld = {};
-      if (midiTickId) clearInterval(midiTickId);
-      midiTickId = setInterval(midiScoreTick, 20);
+      newSession();
       input.onmidimessage = onMidiMessage;
-      // escuchar conexiones/desconexiones en caliente
       access.onstatechange = function () {
         if (!running || sourceMode !== 'midi') return;
         var live = pickMidiInput(access);
@@ -264,6 +307,11 @@
       elBtn.classList.add('listening');
       elHint.textContent = '';
       renderMidiStatus();
+      hopTimer = setInterval(function () {
+        if (!running || !session) return;
+        session.advance(performance.now());
+        scheduleStaffRedraw();
+      }, engine.HOP_MS);
     }).catch(function (err) {
       stop();
       elHint.textContent = 'Acceso MIDI denegado: ' + (err && err.name ? err.name : 'error');
@@ -276,7 +324,6 @@
     for (var it = inputs.next(); !it.done; it = inputs.next()) {
       var inp = it.value;
       if (inp.type === 'input') {
-        // preferir uno que ya esté enviando datos (connection === 'open')
         if (inp.connection === 'open') return inp;
         if (!first) first = inp;
       }
@@ -285,236 +332,33 @@
   }
 
   function onMidiMessage(e) {
-    // R11: solo note-on/note-off del canal 0-15; velocity 0 = note-off
+    if (!session || !e.data || e.data.length < 2) return;
     var status = e.data[0] & 0xf0;
     var midiNum = e.data[1];
-    var velocity = e.data[2];
-    if (midiNum < MIDI_MIN || midiNum > MIDI_MAX) return; // R3 fuera de rango
-    var note = window.Pitch.noteFromMidi(midiNum);
-    if (!note) return;
+    var velocity = e.data.length > 2 ? e.data[2] : 0;
+    var now = performance.now();
     if (status === 0x90 && velocity > 0) {
-      midiHeld[midiNum] = true;
-      var out = window.Hold.midiUpdate(holdState, note);
-      if (out.display) {
-        lastFreq = null; // MIDI no da Hz medidos; mostramos la referencia teórica
-        lastClarity = 1;
-        renderNote(out.display, 1, window.Pitch.hzForNote(out.display.name, out.display.octave, A4));
+      var on = session.press(midiNum, 'midi', now);
+      if (on.events[0] && on.events[0].type === 'on') {
+        var freq = null;
+        try { freq = engine.hzForNote(on.events[0].note, on.events[0].octave); } catch (err) {}
+        showEvent(on.events[0], { midi: midiNum, cents: 0, clarity: 1, freq: freq, db: null });
+        if (on.events[0].fresh) pushTranscriptRow(on.events[0]);
       }
-      if (out.changed) pushLog(out.display);
     } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
-      delete midiHeld[midiNum];
-      var offOut = window.Hold.midiUpdate(holdState, null); // dial: cae al instante
-      if (!offOut.display) renderOff();
+      var off = session.release(midiNum, 'midi', now);
+      if (off.events[0] && off.events[0].released) {
+        if (!off.held.length) renderOff();
+        else showEvent(off.held[off.held.length - 1], null);
+      }
     }
+    scheduleStaffRedraw(true);
   }
 
   function renderMidiStatus() {
-    if (sourceMode === 'midi' && running) {
-      elMidiStatus.textContent = 'MIDI: ' + (midiInputName || 'buscando dispositivo…');
-    } else {
-      elMidiStatus.textContent = '';
-    }
-  }
-
-  // ---- R14/R18: modo Transcripción — capturador (ring 60s) + procesador (ticker 200ms) ----
-
-
-function beginTranscribe(mediaStream) {
-    stream = mediaStream;
-    var source = ctx.createMediaStreamSource(stream);
-    // R8: HP 60 → LP 4k → preamp ×4 (línea ×1) — acondicionamiento fijo sin AGC
-    var hp = ctx.createBiquadFilter();
-    hp.type = 'highpass'; hp.frequency.value = 60; hp.Q.value = 0.707;
-    var lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass'; lp.frequency.value = 4000; lp.Q.value = 0.707;
-    var preamp = ctx.createGain();
-    preamp.gain.value = (sourceMode === 'line') ? 1.0 : 4.0;
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 2048; // 43ms @48k — resolución temporal para tiempo real
-    buf = new Float32Array(analyser.fftSize);
-    source.connect(hp); hp.connect(lp); lp.connect(preamp);
-    preamp.connect(analyser);
-    beginScoreSession(16);
-    txEventCount = 0;
-    elLog.classList.add('chrono');
-    elLog.innerHTML = '';
-    txPendingGroup = null;
-    txGateOpen = false;
-    txLastRms = 0;
-
-    // iOS: reanudar SIEMPRE
-    if (ctx.state === 'suspended') {
-      ctx.resume().then(updateBadge).catch(updateBadge);
-    }
-
-    elBtn.textContent = 'Parar';
-    elBtn.classList.add('listening');
-    elHint.textContent = 'Calibrando ambiente…';
-    renderMidiStatus();
-    // v1.6.1: calibrar ruido de fondo 1.2s → gate relativo (no fijo -45)
-    var calBlocks = [];
-    var calEnd = performance.now() + 1200;
-    txGateThresholdDb = TX_GATE_DB; // fallback fijo mientras calibra
-    function calibrateStep() {
-      if (!analyser) return; // se paró
-      try {
-        analyser.getFloatTimeDomainData(buf);
-        var calDb = window.Gate.rmsDbfs(buf);
-        calBlocks.push(calDb);
-        elFreq.textContent = Math.round(calDb) + 'dB · calibrando…';
-      } catch (e) { /* frame ruidoso */ }
-      if (performance.now() < calEnd) {
-        requestAnimationFrame(calibrateStep);
-      } else {
-        // v1.6.7: umbral = max(ruido+6, -42) — él mide detección real desde -36
-        // y quiere llegar hasta -42; el +6 evita abrir con puro ruido.
-        var nf = window.Gate.calibrateNoiseFloor(calBlocks);
-        txGateThresholdDb = Math.max(nf + 6, TX_GATE_DB);
-        elHint.textContent = 'Tiempo real · ruido ' + Math.round(nf) + 'dB · umbral ' + Math.round(txGateThresholdDb) + 'dB';
-        rafId = requestAnimationFrame(loop);
-      }
-    }
-    requestAnimationFrame(calibrateStep);
-  }
-
-  // Loop tiempo real: cada rAF analiza la ventana actual con YIN (~60 mediciones/s)
-  var txTelemetryAt = 0;   // último refresco de telemetría (4 Hz)
-  var txTelemetryMax = -Infinity; // peak-hold del dB dentro de la ventana de refresco
-  function loop() {
-    rafId = requestAnimationFrame(loop);
-    if (!analyser) return;
-    updateBadge();
-    frameCount++;
-    try {
-      analyser.getFloatTimeDomainData(buf);
-      var rms = 0;
-      for (var i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
-      rms = Math.sqrt(rms / buf.length);
-      var db = 20 * Math.log10(rms + 1e-12);
-      // v1.6.5: telemetría a 4 Hz con peak-hold — legible en vivo
-      if (db > txTelemetryMax) txTelemetryMax = db;
-      var now = performance.now();
-      var showTele = now - txTelemetryAt >= 250;
-      if (showTele) {
-        var peak = txTelemetryMax;
-        txTelemetryMax = -Infinity;
-        txTelemetryAt = now;
-      }
-      if (showTele && db < txGateThresholdDb) {
-        elFreq.textContent = Math.round(peak) + 'dB'; // solo dB bajo el gate
-      }
-      var tMs = now - txSessionStart;
-      if (db < txGateThresholdDb) { // R19: silencio → no analizar
-        txGateOpen = false;
-        feedScoreHop(null, tMs);
-        return; // v1.6.1: el display SE QUEDA con la última nota
-      }
-      txGateOpen = true;
-
-      var res = window.Pitch.detectPitch(buf, ctx.sampleRate, {});
-      // telemetría: dB pico + Hz + claridad, refresco 4 Hz (legible)
-      if (showTele && res.freq != null) {
-        elFreq.textContent = Math.round(peak) + 'dB · ' + res.freq.toFixed(1)
-          + ' Hz · claridad ' + Math.round(res.clarity * 100) + '%';
-      }
-      if (res.freq == null) {
-        feedScoreHop(null, tMs);
-        return;
-      }
-
-      var cand = window.Pitch.noteFromFreq(res.freq, A4);
-      if (!cand || cand.midi < MIDI_MIN || cand.midi > MIDI_MAX) {
-        feedScoreHop(null, tMs);
-        return;
-      }
-
-      // v1.6: umbral adaptativo — agudos C5+ salen más flojos del speaker (rolloff)
-      var threshold = window.Pitch.clarifyThresholdForMidi(cand.midi);
-      if (res.clarity < threshold) {
-        feedScoreHop(null, tMs);
-        return;
-      }
-
-      // v1.6.6: peak del ataque por nota (el frame instantáneo post-AGC es plano)
-      if (cand.midi !== txPeakMidi) {
-        txPeakMidi = cand.midi;
-        txPeakDb = db;
-      } else if (db > txPeakDb) {
-        txPeakDb = db;
-      }
-
-      // display instantáneo (Hold R4)
-      var out = window.Hold.update(cand, holdState);
-      if (out.display) {
-        renderNote(out.display, res.clarity, res.freq, txPeakDb);
-        stableNote = out.display;
-        feedScoreHop([{ midi: out.display.midi, score: res.clarity }], tMs);
-      } else {
-        feedScoreHop(null, tMs);
-      }
-
-      // lista cronológica: evento cuando el display consolida y cambió (R7)
-      if (out.changed) {
-        pushTranscriptRow({
-          midi: cand.midi, chord: false,
-          tStartMs: performance.now() - txSessionStart
-        });
-      }
-    } catch (e) { /* frame ruidoso no rompe el loop */ }
-  }
-
-  function pushTranscriptRow(ev) {
-    txEventCount++;
-    var note = window.Pitch.noteFromMidi(ev.midi);
-    if (!note) return;
-    var label = noteLabel(note);
-    var tSec = (ev.tStartMs / 1000).toFixed(1);
-    var li = document.createElement('li');
-    li.textContent = '#' + txEventCount + ' ' + label + ' · +' + tSec + 's';
-    elLog.appendChild(li);
-    while (elLog.children.length > 500) elLog.removeChild(elLog.firstChild);
-  }
-
-  function stopTranscribe() {
-    txGateOpen = false;
-    txLastRms = 0;
-    txPeakMidi = -1;
-    txPeakDb = -Infinity;
-    txTelemetryMax = -Infinity;
-    txTelemetryAt = 0;
-    elNoteDb.textContent = '';
-    elLog.classList.remove('chrono');
-    elLog.innerHTML = '';
-    txEventCount = 0;
-  }
-
-  // ---- R20: partitura en vivo (EventStream → Score → VexFlow vendored) ----
-
-  function beginScoreSession(hopMs) {
-    txEs = window.EventStream.create();
-    window.EventStream.setHopMs(txEs, hopMs || 16);
-    txSessionStart = performance.now();
-    drawStaff([]);
-  }
-
-  function feedScoreHop(voices, tMs) {
-    if (!txEs || !window.EventStream) return;
-    window.EventStream.push(txEs, voices, tMs);
-    scheduleStaffRedraw();
-  }
-
-  function midiScoreTick() {
-    if (!running || !txEs || !window.EventStream) return;
-    var tMs = performance.now() - txSessionStart;
-    var keys = Object.keys(midiHeld);
-    var voices = null;
-    if (keys.length) {
-      voices = keys.slice(0, 2).map(function (m) {
-        return { midi: +m, score: 1 };
-      });
-    }
-    window.EventStream.push(txEs, voices, tMs);
-    scheduleStaffRedraw();
+    elMidiStatus.textContent = (sourceMode === 'midi' && running)
+      ? ('MIDI: ' + (midiInputName || 'buscando dispositivo…'))
+      : '';
   }
 
   function scheduleStaffRedraw(force) {
@@ -524,75 +368,86 @@ function beginTranscribe(mediaStream) {
     drawStaff();
   }
 
+  function spellKey(midi, ottava) {
+    var m = midi;
+    if (ottava === '8vb') m += 12;
+    var pcs = ['c', 'c#', 'd', 'd#', 'e', 'f', 'f#', 'g', 'g#', 'a', 'a#', 'b'];
+    var pc = ((m % 12) + 12) % 12;
+    var name = pcs[pc];
+    var oct = Math.floor(m / 12) - 1;
+    return { key: name + '/' + oct, accidental: name.length > 1 ? '#' : null };
+  }
+
   function staveNotesFromMeasure(VF, measure, clef) {
     var notes = [];
     var src = (measure && measure.notes) ? measure.notes : [];
     if (!src.length) {
-      notes.push(new VF.StaveNote({
-        clef: clef || 'treble',
-        keys: ['b/4'],
-        duration: 'wr'
-      }));
+      notes.push(new VF.StaveNote({ clef: clef || 'treble', keys: ['b/4'], duration: 'wr' }));
       return notes;
     }
-    for (var i = 0; i < src.length; i++) {
+    var i;
+    for (i = 0; i < src.length; i++) {
       var n = src[i];
-      var sn = new VF.StaveNote({
-        clef: clef || 'treble',
-        keys: n.keys,
-        duration: n.duration
-      });
-      if (!n.rest && n.accidentals) {
-        for (var k = 0; k < n.accidentals.length; k++) {
-          if (n.accidentals[k]) {
-            sn.addModifier(new VF.Accidental(n.accidentals[k]), k);
-          }
+      var keys = [];
+      var acc = [];
+      if (n.rest || n.midi == null) {
+        keys = ['b/4'];
+      } else {
+        var midis = (n.midis && n.midis.length) ? n.midis : [n.midi];
+        var k;
+        for (k = 0; k < midis.length; k++) {
+          var sp = spellKey(midis[k], n.ottava);
+          keys.push(sp.key);
+          acc.push(sp.accidental);
         }
       }
-      if (!n.rest && n.ottava === '8vb') {
-        var ann = new VF.Annotation('8vb');
-        ann.setFont('sans-serif', 10, 'italic');
-        // arriba: las graves ya usan muchas líneas adicionales hacia abajo
-        ann.setVerticalJustification(VF.Annotation.VerticalJustify.TOP);
-        sn.addModifier(ann);
+      var sn = new VF.StaveNote({
+        clef: clef || 'treble',
+        keys: keys,
+        duration: n.duration
+      });
+      if (!n.rest && n.midi != null) {
+        var a;
+        for (a = 0; a < acc.length; a++) {
+          if (acc[a]) sn.addModifier(new VF.Accidental(acc[a]), a);
+        }
+        if (n.ottava === '8vb') {
+          var ann = new VF.Annotation('8vb');
+          ann.setFont('sans-serif', 10, 'italic');
+          ann.setVerticalJustification(VF.Annotation.VerticalJustify.TOP);
+          sn.addModifier(ann);
+        }
       }
       notes.push(sn);
     }
     return notes;
   }
 
-  function drawStaff(eventList) {
-    if (!elStaff || !window.Score) return;
+  function drawStaff() {
+    if (!elStaff) return;
     var VF = window.Vex && window.Vex.Flow;
     if (!VF) return;
-
-    var events = eventList;
-    if (!events) events = (txEs && txEs.events) ? txEs.events : [];
-
-    var data = window.Score.eventsToScore(events, SCORE_OPTS);
+    var data = (session && typeof session.score === 'function')
+      ? session.score()
+      : { clef: 'treble', timeSigStr: '4/4', measures: [{ notes: [] }] };
     var nMeas = Math.max(1, data.measures.length);
     var innerW = (elStaffWrap && elStaffWrap.clientWidth) ? elStaffWrap.clientWidth : 358;
     var staveW = Math.max(260, innerW - 12);
     var rowH = 148;
     var height = 24 + nMeas * rowH;
     var width = staveW + 10;
-
     elStaff.innerHTML = '';
     try {
       var renderer = new VF.Renderer(elStaff, VF.Renderer.Backends.SVG);
       renderer.resize(width, height);
-      var ctx = renderer.getContext();
-
-      for (var m = 0; m < nMeas; m++) {
+      var context = renderer.getContext();
+      var m;
+      for (m = 0; m < nMeas; m++) {
         var y = 18 + m * rowH;
         var stave = new VF.Stave(4, y, staveW);
-        if (m === 0) {
-          stave.addClef(data.clef).addTimeSignature(data.timeSigStr);
-        } else {
-          stave.addClef(data.clef);
-        }
-        stave.setContext(ctx).draw();
-
+        if (m === 0) stave.addClef(data.clef).addTimeSignature(data.timeSigStr || '4/4');
+        else stave.addClef(data.clef);
+        stave.setContext(context).draw();
         var tickables = staveNotesFromMeasure(VF, data.measures[m], data.clef);
         var voice = new VF.Voice({ numBeats: 4, beatValue: 4 });
         voice.setMode(VF.Voice.Mode.SOFT);
@@ -600,46 +455,32 @@ function beginTranscribe(mediaStream) {
         var inner = staveW - (m === 0 ? 90 : 56);
         if (inner < 80) inner = 80;
         new VF.Formatter().joinVoices([voice]).format([voice], inner);
-        voice.draw(ctx, stave);
+        voice.draw(context, stave);
       }
-    } catch (err) { /* un compás mal formado no tumba el detector */ }
+    } catch (err) {}
     if (elStaffWrap) elStaffWrap.scrollTop = elStaffWrap.scrollHeight;
   }
 
-  try {
-    if (window.Vex && window.Vex.Flow && typeof window.Vex.Flow.setMusicFont === 'function') {
-      window.Vex.Flow.setMusicFont('Gonville');
-    }
-  } catch (eFont) { /* Gonville ya va embebida; si falla, default del bundle */ }
-
-  window.PianoStaff = { draw: drawStaff };
-
-  // ---- Eventos ----
-
-  // R12: persistencia de fuente
   function loadSource() {
     try {
       var saved = localStorage.getItem(LS_KEY);
-      // 'transcribe' existió como modo aparte en v1.4.0-dev: normalizar a mic
+      if (!saved) saved = localStorage.getItem(LS_KEY_OLD);
       if (saved === 'transcribe') saved = 'mic';
       if (saved === 'mic' || saved === 'midi' || saved === 'line') sourceMode = saved;
-    } catch (e) { /* localStorage bloqueado → default mic */ }
+    } catch (e) {}
   }
 
   function saveSource() {
-    try { localStorage.setItem(LS_KEY, sourceMode); } catch (e) { /* noop */ }
+    try { localStorage.setItem(LS_KEY, sourceMode); } catch (e) {}
   }
 
   function renderSettings() {
     var radios = elSettings.querySelectorAll('input[name="source"]');
-    for (var i = 0; i < radios.length; i++) {
-      radios[i].checked = (radios[i].value === sourceMode);
-    }
-    elBtnSettings.textContent = (sourceMode === 'mic') ? '⚙ mic'
-      : (sourceMode === 'midi') ? '⚙ midi' : '⚙ línea';
+    var i;
+    for (i = 0; i < radios.length; i++) radios[i].checked = (radios[i].value === sourceMode);
+    elBtnSettings.textContent = sourceMode === 'mic' ? '⚙ mic' : (sourceMode === 'midi' ? '⚙ midi' : '⚙ línea');
   }
 
-  // R12/dial 3: el ⚙ solo aparece cuando está parado
   function renderSettingsVisibility() {
     elBtnSettings.style.display = running ? 'none' : '';
   }
@@ -659,34 +500,52 @@ function beginTranscribe(mediaStream) {
   });
 
   elBtn.addEventListener('click', function () {
-    if (running) {
-      stop();
-    } else {
+    if (!engine) return;
+    if (running) stop();
+    else {
       running = true;
       renderSettingsVisibility();
-      resetDetection();
+      renderOff();
       start();
     }
   });
 
-  // R5: tap general → si el contexto quedó suspendido, reanudar
   document.addEventListener('click', function () {
-    if (ctx && ctx.state === 'suspended') {
-      ctx.resume().then(updateBadge).catch(updateBadge);
-    }
+    if (ctx && ctx.state === 'suspended') ctx.resume().then(updateBadge).catch(updateBadge);
   });
 
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) updateBadge();
   });
 
-  // Estado inicial
-  document.getElementById('version').textContent = VERSION;
+  try {
+    if (window.Vex && window.Vex.Flow && typeof window.Vex.Flow.setMusicFont === 'function') {
+      window.Vex.Flow.setMusicFont('Gonville');
+    }
+  } catch (eFont) {}
+
+  elVersion.textContent = 'v' + APP_VERSION;
+  elBtn.disabled = true;
+  elHint.textContent = 'Cargando motor de notas…';
   loadSource();
   renderSettings();
   renderSettingsVisibility();
   renderMidiStatus();
   renderOff();
-  renderLog();
-  drawStaff([]);
+  drawStaff();
+
+  loadPianoEngine(ENGINE_ROOT).then(function (mod) {
+    engine = mod;
+    elBtn.disabled = false;
+    elHint.textContent = sourceMode === 'midi'
+      ? 'Conecta el piano por USB o Bluetooth MIDI y toca Escuchar'
+      : 'Toca una nota de piano cerca del micrófono';
+    if (mod.VERSION && mod.VERSION !== APP_VERSION) {
+      elVersion.textContent = 'v' + APP_VERSION + ' · motor ' + mod.VERSION;
+    }
+  }).catch(function () {
+    engine = null;
+    elBtn.disabled = true;
+    elHint.textContent = 'No se pudo cargar el motor de notas. Recarga la página.';
+  });
 })();
