@@ -5,7 +5,7 @@
 
   var ENGINE_ROOT = 'https://juliangdeveloper.github.io/piano-transcribe/engine/v1/';
   var ENGINE_KEY = 'piano-transcribe.engine';
-  var APP_VERSION = '1.9.0';
+  var APP_VERSION = '1.9.1';
   var SCORE = { bpm: 80, timeSig: '4/4', clef: 'treble' };
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
