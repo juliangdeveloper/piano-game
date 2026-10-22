@@ -11,7 +11,7 @@
 - Pulsa **Escuchar**. Con el micrófono, el navegador pide permiso.
 - En ⚙ eliges micrófono, MIDI (USB o Bluetooth) o entrada de línea.
 - Arriba ves la nota, los cents y la claridad.
-- Cada nota se escribe en clave de sol, ♩=80 y 4/4. Al pulsar **Parar** la partitura se queda. Al volver a escuchar, empieza de cero.
+- Cada compás va en clave de sol; en clave de fa si todas sus notas están bajo el do central (C4), o en pentagrama doble si mezcla ambas. ♩=80 y 4/4. Al pulsar **Parar** la partitura se queda. Al volver a escuchar, empieza de cero.
 - En iPhone el permiso del micrófono se pide en cada carga. Si el audio queda suspendido, toca la pantalla.
 
 La detección y la cuantización viven en el motor `engine/v1`. Esta página solo lo carga y dibuja el pentagrama con VexFlow.
