@@ -1,4 +1,4 @@
-/* piano-game vendor: VexFlow 4.2.5 (2024-05-12)
+/* piano-transcribe vendor: VexFlow 4.2.5 (2024-05-12)
  * Pinned build: https://github.com/0xfe/vexflow / npm vexflow@4.2.5
  * File: build/cjs/vexflow.js — music fonts (Gonville/Bravura/Petaluma) bundled.
  * Do NOT load from a CDN at runtime. Offline GitHub Pages only.

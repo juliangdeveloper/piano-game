@@ -1,8 +1,8 @@
-# piano-transcribe
+# 🎼 piano-transcribe
 
-Toca el piano y mira las notas en una partitura, en vivo. Micrófono, entrada de línea o MIDI.
+> Toca el piano y mira las notas en una partitura, en vivo. Micrófono, entrada de línea o MIDI.
 
-**[Probar](https://juliangdeveloper.github.io/piano-transcribe/)** · en el navegador, sin instalar
+**[▶ Probar ahora](https://juliangdeveloper.github.io/piano-transcribe/)** · gratis, en el navegador, sin instalar
 
 <img src="docs/screenshot.png" alt="piano-transcribe escribiendo notas en un pentagrama" width="320">
 
@@ -111,4 +111,8 @@ También exporta `noteFromFreq`, `noteFromMidi`, `hzForNote`, `detectPitch`, `se
 
 [piano-magic](https://github.com/juliangdeveloper/piano-magic) juega un combate con el piano y lee este motor. [Jugar](https://juliangdeveloper.github.io/piano-magic/)
 
+---
+
 Más proyectos: https://juliangdeveloper.github.io/
+
+Hecho con ❤️ y 🎼
