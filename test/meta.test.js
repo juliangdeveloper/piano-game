@@ -1,4 +1,3 @@
-// test/meta.test.js — meta.v1 y la migración del progreso de piano-transcribe.
 'use strict';
 
 const { test } = require('node:test');
@@ -11,7 +10,7 @@ const SLUG = 'piano-transcribe';
 const KEY = 'meta.v1.piano-transcribe';
 const CORRUPT = 'meta.v1.piano-transcribe.corrupt';
 const WHEN = new Date('2026-10-23T18:00:00.000Z');
-const VERSION = '1.12.3';
+const VERSION = '1.12.4';
 
 function memoryStorage(initial) {
   const data = Object.assign({}, initial || {});

@@ -1,4 +1,3 @@
-// test/engine.test.js — contrato público de engine/v1/capture.js
 'use strict';
 
 const { test } = require('node:test');
@@ -50,7 +49,7 @@ function feed(mod, profile, buf, hops, extra) {
 test('la versión publicada coincide con version.txt y la interfaz es 1', async () => {
   const mod = await engine();
   const file = fs.readFileSync(path.join(__dirname, '..', 'engine', 'v1', 'version.txt'), 'utf8').trim();
-  assert.strictEqual(mod.VERSION, '1.12.3');
+  assert.strictEqual(mod.VERSION, '1.12.4');
   assert.strictEqual(file, mod.VERSION);
   assert.strictEqual(mod.INTERFACE, 1);
   assert.strictEqual(mod.HOP_MS, 20);
@@ -128,7 +127,6 @@ test('el silencio suelta la nota a los 3 hops y queda en la partitura', async ()
     });
   }
   assert.strictEqual(onAt, 2);
-  // La votación aguanta un frame y luego hacen falta 3 hops en silencio (RELEASE_GAPS).
   assert.strictEqual(offAt, 9);
   const notes = session.score().measures[0].notes.filter(function (n) { return !n.rest; });
   assert.ok(notes.length >= 1);

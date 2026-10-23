@@ -1,4 +1,3 @@
-// meta.v1 proyecto block: written when valid, left out when invalid, optional on read.
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -104,7 +103,6 @@ test('a stored record with a different proyecto gets the current block on the ne
   assert.strictEqual(rec.hitos['first_note'], '2026-01-01T00:00:00.000Z');
   assert.strictEqual(storage.getItem(KEY + '.corrupt'), null);
 
-  // With an invalid current block the stale one is dropped, not kept.
   Meta.metaSetProyecto({ fase: 9 });
   const second = mem({ [KEY]: JSON.stringify(old) });
   update(second, []);

@@ -1,5 +1,3 @@
-// js/meta.js — registro compartido meta.v1. Misma conducta en cada app.
-// UMD: module.exports (Node) + window.Meta (navegador).
 'use strict';
 
 (function (root, factory) {
@@ -15,9 +13,6 @@
   var WRITE_MS = 1000;
   var writeClock = typeof WeakMap === 'function' ? new WeakMap() : null;
 
-  // Project status, set by hand and bumped with the version. Never computed from play.
-  // fase 1-6: Idea, Definición, Diseño, Construcción, Validación, Lanzamiento y mantenimiento.
-  // fase_estado 0-4: pendiente, en curso, bloqueada, en revisión, completada.
   var PROYECTO = {
     objetivo: 'Ver en partitura, en vivo, lo que se toca en el piano por micrófono o MIDI, y servir ese motor de notas a otras apps.',
     fase: 6,
@@ -31,7 +26,6 @@
     return typeof n === 'number' && Number.isInteger(n) && n >= lo && n <= hi;
   }
 
-  // Clean copy of a proyecto block, or null when any field is missing or out of range.
   function metaProyecto(p) {
     try {
       if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
@@ -44,12 +38,10 @@
     }
   }
 
-  // Tests only: swap the block the writer uses (null restores PROYECTO).
   function metaSetProyecto(p) {
     proyectoSource = p === null ? PROYECTO : p;
   }
 
-  // Adds the current proyecto block to a record being written, when it is valid.
   function withProyecto(record) {
     var p = metaProyecto(proyectoSource);
     if (p) record.proyecto = p;

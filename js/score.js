@@ -1,9 +1,3 @@
-// js/score.js — EventStream → partitura cuantizada (VexFlow-ready). Pura, sin DOM.
-// UMD: module.exports + window.Score.
-//
-// Defaults (R20): ♩=80, 4/4, clave de sol. Duraciones al valor más cercano
-// entre [redonda, blanca, negra, corchea, semicorchea]. Silencios en los huecos.
-// MIDI < 48 (C3) se escribe una octava arriba (8vb) en clave de sol.
 'use strict';
 
 (function (root, factory) {
@@ -18,11 +12,10 @@
   var DEFAULT_BPM = 80;
   var DEFAULT_TIME_SIG = '4/4';
   var DEFAULT_CLEF = 'treble';
-  var MIDI_8VB_BELOW = 48; // C3: por debajo, 8vb en clave de sol
-  var CHORD_WINDOW_MS = 40; // mismo onset → acorde
+  var MIDI_8VB_BELOW = 48;
+  var CHORD_WINDOW_MS = 40;
   var VF_PC = ['c', 'c#', 'd', 'd#', 'e', 'f', 'f#', 'g', 'g#', 'a', 'a#', 'b'];
 
-  // Valor en pulsos de negra. semicorchea=0.25 … redonda=4.
   var DURATION_TABLE = [
     { type: 'w', beats: 4, sixteenths: 16 },
     { type: 'h', beats: 2, sixteenths: 8 },
@@ -53,7 +46,6 @@
   }
 
   function measureSixteenths(ts) {
-    // 4/4 → 16 semicorcheas; 3/4 → 12, etc. den=4 → num*4; den=8 → num*2.
     return Math.round(ts.num * (16 / ts.den));
   }
 
@@ -64,10 +56,6 @@
     return '16';
   }
 
-  /**
-   * Cuantiza una duración en ms al valor de nota más cercano
-   * entre w/h/q/8/16 al BPM dado.
-   */
   function quantizeDuration(durationMs, bpm) {
     var cfg = defaults({ bpm: bpm });
     var qMs = quarterMs(cfg.bpm);
@@ -78,7 +66,6 @@
     var bestDiff = Infinity;
     for (var i = 0; i < DURATION_TABLE.length; i++) {
       var d = Math.abs(beats - DURATION_TABLE[i].beats);
-      // empate → el valor más corto (más cercano a lo tocado si es breve)
       if (d < bestDiff || (d === bestDiff && DURATION_TABLE[i].beats < best.beats)) {
         bestDiff = d;
         best = DURATION_TABLE[i];
@@ -92,9 +79,6 @@
     };
   }
 
-  /**
-   * MIDI → clave VexFlow (`c/4`). midi < 48 se escribe +12 (8vb).
-   */
   function midiToKey(midi) {
     if (typeof midi !== 'number' || !isFinite(midi)) {
       return { key: 'c/4', ottava: null, midi: midi, accidental: null };
@@ -233,10 +217,6 @@
     return measures;
   }
 
-  /**
-   * events: [{midi, score, chord, tStartMs, tEndMs, count}, ...]
-   * opts: {bpm, timeSig, clef}
-   */
   function eventsToScore(events, opts) {
     var cfg = defaults(opts);
     var ts = parseTimeSig(cfg.timeSig);

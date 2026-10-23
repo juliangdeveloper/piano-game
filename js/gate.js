@@ -1,7 +1,3 @@
-// js/gate.js — Filtro de nivel por RMS en dBFS (R19): si no hay nada sonando
-// (ruido de fondo por debajo del umbral), el procesador ni pregunta a las máscaras.
-// Histéresis de 8 dB: abierto cierra a (umbral − 8) — evita opening/closing parpadeante
-// en el borde del umbral. Puro, sin DOM. UMD: module.exports + window.Gate.
 'use strict';
 
 (function (root, factory) {
@@ -14,7 +10,7 @@
   'use strict';
 
   var HYST_DB = 8;
-  var FLOOR_MIN_DB = -55; // piso absoluto: ambientes muertos no bajan el umbral de aquí
+  var FLOOR_MIN_DB = -55;
 
   function rmsDbfs(buffer) {
     var sum = 0;
@@ -23,18 +19,9 @@
     return 20 * Math.log10(rms + 1e-12);
   }
 
-  /**
-   * calibrateNoiseFloor(blockDb[]) → threshold dB para el gate.
-   * Recibe RMS dBFS por bloque (medidos durante la calibración de arranque).
-   * Toma el percentil 90 (tolera picos aislados del ambiente) y le suma margen;
-   * nunca baja de FLOOR_MIN_DB.
-   */
   function calibrateNoiseFloor(blockDb) {
     if (!blockDb || blockDb.length === 0) return FLOOR_MIN_DB;
     var sorted = blockDb.slice().sort(function (a, b) { return a - b; });
-    // dB es logarítmico: promedio aritmético de dB sobre-pondera los picos.
-    // Usar MEDIANA (percentil 50): la mayoría de los bloques de calibración
-    // son puro ruido de fondo, los picos son minoría.
     var mid = Math.floor(sorted.length / 2);
     var median = sorted.length % 2
       ? sorted[mid]
@@ -42,20 +29,10 @@
     return Math.max(median, FLOOR_MIN_DB);
   }
 
-  /**
-   * passes(buffer, thresholdDb): gate cerrado — pasa solo si rms > threshold.
-   * (no considera histéresis: es el chequeo estático)
-   */
   function passes(buffer, thresholdDb) {
     return rmsDbfs(buffer) > thresholdDb;
   }
 
-  /**
-   * decide(buffer, thresholdDb, wasOpen) → {db, open, passed}
-   * - estaba cerrado: abre si db > threshold (y pasa)
-   * - estaba abierto: sigue abierto mientras db > threshold − HYST_DB
-   * - al cerrar: no pasa
-   */
   function decide(buffer, thresholdDb, wasOpen) {
     var db = rmsDbfs(buffer);
     var open = wasOpen ? (db > thresholdDb - HYST_DB) : (db > thresholdDb);
