@@ -178,7 +178,7 @@ function clarifyThresholdForMidi(midi, opts) {
 }
 
 var INTERFACE = 1;
-var VERSION = '1.10.0';
+var VERSION = '1.11.0';
 var HOP_MS = 20;
 
 var MIN_RUN = 2;
@@ -544,369 +544,6 @@ function greedySixteenths(n) {
   return parts;
 }
 
-// Dedo 1–5 (pulgar = 1). hand 'L' espeja la derecha. Un finger 1–5 ya
-// presente en la nota se conserva; si no, se sugiere.
-var FINGER_OFFSET = [0, 2, 4, 5, 7];
-
-function readFinger(value) {
-  if (typeof value !== 'number' || !isFinite(value)) return null;
-  var n = Math.round(value);
-  if (n < 1 || n > 5) return null;
-  return n;
-}
-
-function handCode(opts) {
-  var h = opts && opts.hand != null ? String(opts.hand).toLowerCase() : 'r';
-  if (h === 'l' || h === 'left' || h === 'lh') return 'L';
-  return 'R';
-}
-
-function fingerIdeal(a, b) {
-  return FINGER_OFFSET[b - 1] - FINGER_OFFSET[a - 1];
-}
-
-function fingerMax(a, b) {
-  var d = b - a;
-  var table = [0, 5, 9, 12, 14];
-  return table[d] != null ? table[d] : 14;
-}
-
-function fingerBlack(midi) {
-  var pc = ((midi % 12) + 12) % 12;
-  return pc === 1 || pc === 3 || pc === 6 || pc === 8 || pc === 10;
-}
-
-function fingerTransition(prevCoord, prevFinger, coord, finger) {
-  var d = coord - prevCoord;
-  var dist;
-  var asc;
-  var lo;
-  var hi;
-  var ideal;
-  var diff;
-  var cost;
-  var base;
-  if (d === 0) return finger === prevFinger ? 0 : 3;
-  asc = d > 0;
-  dist = asc ? d : -d;
-  if (asc ? (finger > prevFinger) : (finger < prevFinger)) {
-    lo = finger < prevFinger ? finger : prevFinger;
-    hi = finger > prevFinger ? finger : prevFinger;
-    if (dist <= fingerMax(lo, hi) && dist >= 1) {
-      ideal = fingerIdeal(lo, hi);
-      diff = dist > ideal ? dist - ideal : ideal - dist;
-      cost = diff <= 1 ? diff * 0.15 : (0.15 + (diff - 1) * 1.05);
-      if (dist > ideal + 3) cost += (dist - ideal - 3) * 0.8;
-      return cost;
-    }
-  }
-  if (asc && finger === 1 && prevFinger >= 2 && prevFinger <= 4 && dist >= 1 && dist <= 6) {
-    base = prevFinger === 3 ? 2.2 : (prevFinger === 4 ? 3.3 : 4.6);
-    return base + Math.abs(dist - 2) * 0.4;
-  }
-  if (!asc && prevFinger === 1 && finger >= 2 && finger <= 4 && dist >= 1 && dist <= 6) {
-    base = finger === 3 ? 2.2 : (finger === 4 ? 3.3 : 4.6);
-    return base + Math.abs(dist - 2) * 0.4;
-  }
-  return 6 + dist * 0.35;
-}
-
-function fingerLocal(coords, fingers, midis) {
-  var cost = 0;
-  var i;
-  var span;
-  var lo;
-  var hi;
-  for (i = 0; i < fingers.length; i++) {
-    if (fingers[i] === 1 && fingerBlack(midis[i])) cost += 3.5;
-    else if (fingers[i] === 5 && fingerBlack(midis[i])) cost += 0.6;
-  }
-  for (i = 1; i < fingers.length; i++) {
-    span = coords[i] - coords[i - 1];
-    lo = fingers[i - 1];
-    hi = fingers[i];
-    if (hi <= lo || span < 1) return 1e6;
-    if (span > fingerMax(lo, hi)) {
-      if (lo === 1 && hi === 5 && fingers.length === 2) cost += 8 + (span - fingerMax(1, 5));
-      else return 1e6;
-    } else {
-      cost += Math.abs(span - fingerIdeal(lo, hi)) * 1.15;
-    }
-  }
-  return cost;
-}
-
-function fingerCandidates(locks) {
-  var n = locks.length;
-  var out = [];
-  var forced = false;
-  function okLock(fs) {
-    var i;
-    for (i = 0; i < n; i++) if (locks[i] != null && locks[i] !== fs[i]) return false;
-    return true;
-  }
-  function rec(start, left, acc) {
-    var f;
-    if (left === 0) {
-      if (okLock(acc)) out.push(acc.slice());
-      return;
-    }
-    for (f = start; f <= 5 - left + 1; f++) {
-      acc.push(f);
-      rec(f + 1, left - 1, acc);
-      acc.pop();
-    }
-  }
-  if (n >= 1 && n <= 5) rec(1, n, []);
-  if (!out.length) {
-    var fs = [];
-    var used = {};
-    var prefer = n === 2 ? [1, 5] : (n === 3 ? [1, 3, 5] : (n === 4 ? [1, 2, 4, 5] : [1, 2, 3, 4, 5]));
-    var i;
-    var pi = 0;
-    var pick;
-    var f;
-    for (i = 0; i < n; i++) if (locks[i] != null) used[locks[i]] = true;
-    for (i = 0; i < n; i++) {
-      if (locks[i] != null) {
-        fs.push(locks[i]);
-        continue;
-      }
-      pick = null;
-      while (pi < prefer.length) {
-        if (!used[prefer[pi]]) { pick = prefer[pi]; pi++; break; }
-        pi++;
-      }
-      if (pick == null) {
-        for (f = 1; f <= 5; f++) if (!used[f]) { pick = f; break; }
-      }
-      if (pick == null) pick = 1;
-      used[pick] = true;
-      fs.push(pick);
-    }
-    out.push(fs);
-    forced = true;
-  }
-  return { list: out, forced: forced };
-}
-
-function spellFinger(midi, finger) {
-  var n = noteFromMidi(midi);
-  if (!n) return null;
-  return { midi: n.midi, pitch: n.name + n.octave, note: n.name, octave: n.octave, finger: finger };
-}
-
-function buildFingerStep(item, sign) {
-  var raw = [];
-  function add(midiValue, lock) {
-    var parsed = null;
-    if (midiValue && typeof midiValue === 'object') {
-      if (lock == null) lock = midiValue.finger;
-      if (typeof midiValue.midi === 'number') parsed = parsePitch(midiValue.midi);
-      else if (typeof midiValue.pitch === 'string') parsed = parsePitch(midiValue.pitch);
-      else if (typeof midiValue.note === 'string' && typeof midiValue.octave === 'number') {
-        parsed = parsePitch(midiValue.note + midiValue.octave);
-      }
-    } else {
-      parsed = parsePitch(midiValue);
-    }
-    if (!parsed) return;
-    raw.push({ midi: parsed.midi, coord: sign * parsed.midi, lock: readFinger(lock) });
-  }
-  var arr = null;
-  var locks = [];
-  var i;
-  if (Array.isArray(item)) arr = item;
-  else if (item && typeof item === 'object' && (Array.isArray(item.midis) || Array.isArray(item.notes) || Array.isArray(item.pitches))) {
-    arr = item.midis || item.notes || item.pitches;
-    locks = Array.isArray(item.fingers) ? item.fingers : [];
-  }
-  if (arr) {
-    for (i = 0; i < arr.length; i++) add(arr[i], locks[i]);
-  } else {
-    add(item, item && typeof item === 'object' ? item.finger : null);
-  }
-  raw.sort(function (a, b) { return a.coord - b.coord || a.midi - b.midi; });
-  var parts = [];
-  for (i = 0; i < raw.length && parts.length < 5; i++) {
-    if (parts.length && parts[parts.length - 1].midi === raw[i].midi) {
-      if (parts[parts.length - 1].lock == null) parts[parts.length - 1].lock = raw[i].lock;
-      continue;
-    }
-    parts.push(raw[i]);
-  }
-  return parts;
-}
-
-function emptyFingering() {
-  return { finger: null, midi: null, pitch: null, note: null, octave: null, notes: [] };
-}
-
-function solveFingers(steps) {
-  var dp = [];
-  var i;
-  var c;
-  var p;
-  for (i = 0; i < steps.length; i++) {
-    var parts = steps[i];
-    var coords = [];
-    var midis = [];
-    var locks = [];
-    var k;
-    for (k = 0; k < parts.length; k++) {
-      coords.push(parts[k].coord);
-      midis.push(parts[k].midi);
-      locks.push(parts[k].lock);
-    }
-    var cand = fingerCandidates(locks);
-    dp[i] = [];
-    for (c = 0; c < cand.list.length; c++) {
-      var fs = cand.list[c];
-      var loc = (cand.forced && c === cand.list.length - 1 && cand.list.length === 1) ? 0 : fingerLocal(coords, fs, midis);
-      if (loc >= 1e6) continue;
-      var best = null;
-      var bestP = -1;
-      if (i === 0) best = loc + (fs[0] - 1) * 0.2;
-      else {
-        for (p = 0; p < dp[i - 1].length; p++) {
-          var prev = dp[i - 1][p];
-          var add = 0;
-          var a;
-          var b;
-          for (a = 0; a < fs.length; a++) {
-            var link = 1e9;
-            for (b = 0; b < prev.fs.length; b++) {
-              var tcost = fingerTransition(prev.coords[b], prev.fs[b], coords[a], fs[a]);
-              if (tcost < link) link = tcost;
-            }
-            add += link;
-          }
-          var tot = prev.cost + loc + add;
-          if (best == null || tot < best) { best = tot; bestP = p; }
-        }
-      }
-      if (best != null) dp[i].push({ fs: fs, coords: coords, midis: midis, cost: best, prev: bestP });
-    }
-    if (!dp[i].length) {
-      var spread = fingerCandidates(locks).list[0];
-      dp[i].push({
-        fs: spread,
-        coords: coords,
-        midis: midis,
-        cost: (i && dp[i - 1].length ? dp[i - 1][0].cost : 0) + 30,
-        prev: i && dp[i - 1].length ? 0 : -1
-      });
-    }
-  }
-  var last = dp[steps.length - 1];
-  var bi = 0;
-  for (i = 1; i < last.length; i++) if (last[i].cost < last[bi].cost) bi = i;
-  var picked = [];
-  for (i = steps.length - 1; i >= 0; i--) {
-    picked[i] = last[bi];
-    bi = last[bi].prev;
-    last = i ? dp[i - 1] : null;
-  }
-  var results = [];
-  for (i = 0; i < picked.length; i++) {
-    var pairs = [];
-    for (k = 0; k < picked[i].midis.length; k++) {
-      var sp = spellFinger(picked[i].midis[k], picked[i].fs[k]);
-      if (sp) pairs.push(sp);
-    }
-    pairs.sort(function (a, b) { return a.midi - b.midi; });
-    var top = pairs.length ? pairs[0] : null;
-    results.push({
-      finger: top ? top.finger : null,
-      midi: top ? top.midi : null,
-      pitch: top ? top.pitch : null,
-      note: top ? top.note : null,
-      octave: top ? top.octave : null,
-      notes: pairs
-    });
-  }
-  return results;
-}
-
-function suggestFingering(notes, opts) {
-  if (!Array.isArray(notes)) return [];
-  var sign = handCode(opts) === 'L' ? -1 : 1;
-  var built = [];
-  var index = [];
-  var i;
-  for (i = 0; i < notes.length; i++) {
-    var parts = buildFingerStep(notes[i], sign);
-    if (!parts.length) continue;
-    index.push(i);
-    built.push(parts);
-  }
-  var solved = built.length ? solveFingers(built) : [];
-  var out = [];
-  for (i = 0; i < notes.length; i++) out.push(emptyFingering());
-  for (i = 0; i < index.length; i++) out[index[i]] = solved[i];
-  return out;
-}
-
-function applyFingering(measures) {
-  var hands = { R: [], L: [] };
-  var mi;
-  var ni;
-  var k;
-  for (mi = 0; mi < measures.length; mi++) {
-    var notes = measures[mi].notes || [];
-    for (ni = 0; ni < notes.length; ni++) {
-      var note = notes[ni];
-      if (!note || note.rest || !note.midis || !note.midis.length) continue;
-      var buckets = { R: [], L: [] };
-      for (k = 0; k < note.midis.length; k++) {
-        var hand = note.midis[k] >= 60 ? 'R' : 'L';
-        var lock = note.givenFingers && typeof note.givenFingers[k] === 'number' ? note.givenFingers[k] : null;
-        buckets[hand].push({ midi: note.midis[k], index: k, lock: lock });
-      }
-      note.fingers = [];
-      for (k = 0; k < note.midis.length; k++) note.fingers.push(null);
-      if (buckets.R.length) hands.R.push({ note: note, slots: buckets.R });
-      if (buckets.L.length) hands.L.push({ note: note, slots: buckets.L });
-    }
-  }
-  function writeHand(hand, list) {
-    if (!list.length) return;
-    var input = [];
-    var i;
-    var j;
-    for (i = 0; i < list.length; i++) {
-      input.push({
-        midis: list[i].slots.map(function (s) { return s.midi; }),
-        fingers: list[i].slots.map(function (s) { return s.lock; })
-      });
-    }
-    var got = suggestFingering(input, { hand: hand });
-    for (i = 0; i < list.length; i++) {
-      var row = got[i] && got[i].notes ? got[i].notes : [];
-      for (j = 0; j < list[i].slots.length; j++) {
-        var slot = list[i].slots[j];
-        var finger = null;
-        var g;
-        for (g = 0; g < row.length; g++) if (row[g].midi === slot.midi) finger = row[g].finger;
-        if (slot.lock != null) finger = slot.lock;
-        list[i].note.fingers[slot.index] = finger;
-        if (list[i].note.voices && list[i].note.voices[slot.index]) {
-          list[i].note.voices[slot.index].finger = finger;
-        }
-      }
-      list[i].note.finger = list[i].note.fingers.length ? list[i].note.fingers[0] : null;
-    }
-  }
-  writeHand('R', hands.R);
-  writeHand('L', hands.L);
-  for (mi = 0; mi < measures.length; mi++) {
-    var src = measures[mi].notes || [];
-    for (ni = 0; ni < src.length; ni++) {
-      if (src[ni]) delete src[ni].givenFingers;
-    }
-  }
-}
-
 function eventsToScore(events, opts) {
   opts = opts || {};
   var bpm = (typeof opts.bpm === 'number' && opts.bpm > 0) ? opts.bpm : DEFAULT_BPM;
@@ -948,7 +585,6 @@ function eventsToScore(events, opts) {
     }
     measures[mi].index = mi;
   }
-  applyFingering(measures);
   return { bpm: bpm, timeSig: ts, timeSigStr: ts.str, clef: clef, measures: measures };
 }
 
@@ -959,8 +595,6 @@ function noteItem(group, q) {
   var octaves = [];
   var accidentals = [];
   var ottava = null;
-  var givenFingers = [];
-  var anyGiven = false;
   var i;
   for (i = 0; i < group.events.length; i++) {
     var sp = parsePitch(group.events[i].midi);
@@ -971,15 +605,12 @@ function noteItem(group, q) {
     octaves.push(sp.octave);
     accidentals.push(sp.note.charAt(1) === '#' ? '#' : null);
     if (sp.midi < MIDI_8VB_BELOW) ottava = '8vb';
-    var gf = readFinger(group.events[i].finger);
-    givenFingers.push(gf);
-    if (gf != null) anyGiven = true;
   }
   var voices = [];
   for (i = 0; i < midis.length; i++) {
-    voices.push({ pitch: pitches[i], note: notes[i], octave: octaves[i], midi: midis[i], finger: null });
+    voices.push({ pitch: pitches[i], note: notes[i], octave: octaves[i], midi: midis[i] });
   }
-  var row = {
+  return {
     rest: false,
     duration: q.type,
     beats: q.beats,
@@ -993,12 +624,8 @@ function noteItem(group, q) {
     octaves: octaves,
     accidentals: accidentals,
     ottava: ottava,
-    voices: voices,
-    finger: null,
-    fingers: []
+    voices: voices
   };
-  if (anyGiven) row.givenFingers = givenFingers;
-  return row;
 }
 
 function restItem(q) {
@@ -1016,9 +643,7 @@ function restItem(q) {
     octaves: [],
     accidentals: [],
     ottava: null,
-    voices: [],
-    finger: null,
-    fingers: []
+    voices: []
   };
 }
 
@@ -1046,12 +671,6 @@ function sameMidis(a, b) {
 }
 
 function sliceItems(events, bpm) {
-  var fingerByMidi = {};
-  var ei;
-  for (ei = 0; ei < events.length; ei++) {
-    var gf = readFinger(events[ei] && events[ei].finger);
-    if (gf != null) fingerByMidi[events[ei].midi] = gf;
-  }
   var times = [];
   function addT(t) {
     var i;
@@ -1104,9 +723,7 @@ function sliceItems(events, bpm) {
       continue;
     }
     var group = { events: [] };
-    for (k = 0; k < sl.midis.length; k++) {
-      group.events.push({ midi: sl.midis[k], finger: fingerByMidi[sl.midis[k]] });
-    }
+    for (k = 0; k < sl.midis.length; k++) group.events.push({ midi: sl.midis[k] });
     items.push(noteItem(group, quantizeDuration(dur, bpm)));
   }
   return items;
@@ -1535,15 +1152,12 @@ function createCapture(options) {
     for (i = 0; i < ids.length; i++) open[ids[i]].tEndMs = t;
   }
 
-  function ensureOpen(midi, t, clarity, finger) {
-    var f = readFinger(finger);
+  function ensureOpen(midi, t, clarity) {
     if (open[midi]) {
       open[midi].tEndMs = t;
-      if (f != null && open[midi].finger == null) open[midi].finger = f;
       return;
     }
     var row = { midi: midi, score: clarity || 1, chord: false, tStartMs: t, tEndMs: t, count: 1 };
-    if (f != null) row.finger = f;
     events.push(row);
     open[midi] = row;
   }
@@ -1593,24 +1207,20 @@ function createCapture(options) {
     var p = parsePitch(pitchStr);
     if (!p) return null;
     if (kind === 'on') {
-      if (merged.fresh) ensureOpen(p.midi, t, extra && extra.clarity, extra && extra.finger);
+      if (merged.fresh) ensureOpen(p.midi, t, extra && extra.clarity);
       return onEvent(p, source, t, merged, extra);
     }
     if (merged.released) closeScore(p.midi, t);
     return offEvent(p, source, t, merged.released);
   }
 
-  function press(pitch, source, nowMs, extra) {
+  function press(pitch, source, nowMs) {
     var p = parsePitch(pitch);
     var t = rel(nowMs);
     if (!p || p.midi < cfg.minMidi || p.midi > cfg.maxMidi) return pack([], null);
     source = source || 'key';
     var merged = mergePress(heldMap, p.pitch, source);
-    var ev = applyEdge('on', p.pitch, source, t, merged, {
-      cents: p.cents,
-      clarity: 1,
-      finger: extra && typeof extra === 'object' ? extra.finger : null
-    });
+    var ev = applyEdge('on', p.pitch, source, t, merged, { cents: p.cents, clarity: 1 });
     touchOpen(t);
     return pack(ev ? [ev] : [], null);
   }
@@ -1775,7 +1385,6 @@ export {
   noteFromFreq,
   noteFromMidi,
   hzForNote,
-  suggestFingering,
   sessionType,
   denyMessage,
   statusLine
