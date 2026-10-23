@@ -84,9 +84,10 @@ loadPianoEngine(ENGINE_ROOT).then(function (engine) {
   //   source, sound, combat, fresh, released, t, voices }
   // voices: [{ pitch, note, octave, midi }, ...] notas que siguen sonando.
   // out.score.measures[].notes: { rest, pitch, note, octave, midi, midis, pitches,
-  //   duration, beats, beat, measure, ottava, accidentals, voices }
+  //   duration, beats, beat, measure, ottava, accidentals, voices, finger, fingers }
   // pitch/note/octave/midi son la nota más grave. voices lista el acorde.
   // duration: w h q 8 16; el silencio lleva r (qr). MIDI < 48 trae ottava '8vb'.
+  // suggestFingering([60, 62, 64, 65, 67], { hand: 'R' }) → dedos 1 2 3 4 5 (pulgar = 1); 'L' espeja, y un finger ya puesto se mantiene.
   session.press('C4', 'key', performance.now());   // o session.press(60, 'midi', now)
   session.release('C4', 'key', performance.now());
   session.advance(performance.now());               // alarga lo que sigue pulsado

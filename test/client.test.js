@@ -28,8 +28,13 @@ test('la interfaz carga /engine/v1/ y no los archivos internos', () => {
   assert.equal(/js\/pitch\.js/.test(html), false);
   assert.equal(/js\/score\.js/.test(html), false);
   assert.equal(/js\/gate\.js/.test(html), false);
-  assert.ok(html.includes('js/vexflow.js?v=1.9.2'));
-  assert.ok(html.includes('js/app.js?v=1.9.2'));
+  assert.ok(html.includes('js/vexflow.js?v=1.10.0'));
+  assert.ok(html.includes('js/app.js?v=1.10.0'));
+  assert.ok(app.includes('FretHandFinger'));
+  assert.ok(app.includes('Modifier.Position.ABOVE'));
+  assert.ok(app.includes('Modifier.Position.BELOW'));
+  assert.ok(app.includes('givenFingers'));
+  assert.ok(readme.includes('suggestFingering'));
   assert.ok(html.includes('piano-transcribe'));
   assert.ok(readme.includes(url));
   assert.ok(readme.includes('capture.js?v='));

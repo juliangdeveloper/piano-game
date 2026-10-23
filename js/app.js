@@ -5,7 +5,7 @@
 
   var ENGINE_ROOT = 'https://juliangdeveloper.github.io/piano-transcribe/engine/v1/';
   var ENGINE_KEY = 'piano-transcribe.engine';
-  var APP_VERSION = '1.9.2';
+  var APP_VERSION = '1.10.0';
   var SCORE = { bpm: 80, timeSig: '4/4', clef: 'treble' };
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -408,6 +408,13 @@
     return 'treble';
   }
 
+  function fingerNumber(n, index) {
+    if (n.givenFingers && typeof n.givenFingers[index] === 'number') return n.givenFingers[index];
+    if (n.fingers && typeof n.fingers[index] === 'number') return n.fingers[index];
+    if (index === 0 && typeof n.finger === 'number' && (!n.fingers || !n.fingers.length)) return n.finger;
+    return null;
+  }
+
   function staveNotesFromMeasure(VF, measure, clef, band) {
     var notes = [];
     var src = (measure && measure.notes) ? measure.notes : [];
@@ -420,17 +427,20 @@
       var n = src[i];
       var keys = [];
       var acc = [];
+      var drawnFingers = [];
       var sounding = !(n.rest || n.midi == null);
       if (sounding) {
         var midis = (n.midis && n.midis.length) ? n.midis.slice() : [n.midi];
-        midis.sort(function (a, b) { return a - b; });
+        var order = midis.map(function (m, idx) { return { m: m, i: idx }; });
+        order.sort(function (a, b) { return a.m - b.m; });
         var k;
-        for (k = 0; k < midis.length; k++) {
-          if (band === 'low' && midis[k] >= 60) continue;
-          if (band === 'high' && midis[k] < 60) continue;
-          var sp = spellKey(midis[k], clef === 'treble' ? n.ottava : null);
+        for (k = 0; k < order.length; k++) {
+          if (band === 'low' && order[k].m >= 60) continue;
+          if (band === 'high' && order[k].m < 60) continue;
+          var sp = spellKey(order[k].m, clef === 'treble' ? n.ottava : null);
           keys.push(sp.key);
           acc.push(sp.accidental);
+          drawnFingers.push(fingerNumber(n, order[k].i));
         }
       }
       var isRest = !keys.length;
@@ -450,6 +460,14 @@
           ann.setVerticalJustification(VF.Annotation.VerticalJustify.TOP);
           sn.addModifier(ann);
         }
+        var fingerPos = clef === 'bass' ? VF.Modifier.Position.BELOW : VF.Modifier.Position.ABOVE;
+        for (a = 0; a < drawnFingers.length; a++) {
+          if (typeof drawnFingers[a] !== 'number') continue;
+          var fingerMod = new VF.FretHandFinger(String(drawnFingers[a]));
+          fingerMod.setPosition(fingerPos);
+          fingerMod.setFont('sans-serif', 14, 'bold');
+          sn.addModifier(fingerMod, a);
+        }
       }
       notes.push(sn);
     }
@@ -468,10 +486,10 @@
     var staveW = Math.max(260, innerW - 12);
     var kinds = [];
     var m;
-    var height = 24;
+    var height = 40;
     for (m = 0; m < nMeas; m++) {
       kinds[m] = staffKind(measureMidis(data.measures[m]));
-      height += kinds[m] === 'grand' ? 250 : 148;
+      height += kinds[m] === 'grand' ? 276 : 168;
     }
     var width = staveW + 10;
     elStaff.innerHTML = '';
@@ -479,7 +497,7 @@
       var renderer = new VF.Renderer(elStaff, VF.Renderer.Backends.SVG);
       renderer.resize(width, height);
       var context = renderer.getContext();
-      var y = 18;
+      var y = 36;
       for (m = 0; m < nMeas; m++) {
         var kind = kinds[m];
         var inner = staveW - (m === 0 ? 90 : 56);
@@ -501,7 +519,7 @@
           new VF.Formatter().joinVoices([high, low]).format([high, low], inner);
           high.draw(context, treble);
           low.draw(context, bass);
-          y += 250;
+          y += 276;
         } else {
           var clef = kind === 'bass' ? 'bass' : (data.clef || 'treble');
           var stave = new VF.Stave(4, y, staveW);
@@ -513,7 +531,7 @@
           voice.addTickables(staveNotesFromMeasure(VF, data.measures[m], clef, 'all'));
           new VF.Formatter().joinVoices([voice]).format([voice], inner);
           voice.draw(context, stave);
-          y += 148;
+          y += 168;
         }
       }
     } catch (err) {}
