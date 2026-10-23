@@ -12,9 +12,15 @@
   'use strict';
 
   var STAT_LIMIT = 20;
+  var WRITE_MS = 1000;
+  var writeClock = typeof WeakMap === 'function' ? new WeakMap() : null;
 
   function keyFor(slug) {
     return 'meta.v1.' + slug;
+  }
+
+  function corruptKey(slug) {
+    return keyFor(slug) + '.corrupt';
   }
 
   function finiteNumber(value) {
@@ -37,9 +43,32 @@
     return null;
   }
 
+  function locationSearch(win) {
+    try {
+      if (win && win.location && typeof win.location.search === 'string') return win.location.search;
+    } catch (e) {}
+    return '';
+  }
+
+  function isDemo(env) {
+    if (env && env.demo === true) return true;
+    var search = locationSearch(resolveWindow(env));
+    return /(?:^|[?&])demo=(?:1|true)(?:&|$)/.test(search)
+      || /(?:^|[?&])preview=(?:1|true)(?:&|$)/.test(search);
+  }
+
   function resolveNow(env) {
     if (env && env.now != null) return env.now;
+    if (env && typeof env.nowMs === 'number' && isFinite(env.nowMs)) return new Date(env.nowMs);
     return new Date();
+  }
+
+  function rateMs(env) {
+    if (env && typeof env.nowMs === 'number' && isFinite(env.nowMs)) return env.nowMs;
+    var now = resolveNow(env);
+    var date = now instanceof Date ? now : new Date(now);
+    var ms = date.getTime();
+    return isNaN(ms) ? Date.now() : ms;
   }
 
   function stampOf(now) {
@@ -48,34 +77,66 @@
     return date.toISOString();
   }
 
-  function cleanStats(stats) {
-    var out = {};
-    var count = 0;
-    if (!stats || typeof stats !== 'object' || Array.isArray(stats)) return out;
-    var keys = Object.keys(stats);
+  function plainVersion(version) {
+    var text = String(version == null ? '' : version).replace(/^\s+/, '');
+    if (text.charAt(0) === 'v' || text.charAt(0) === 'V') text = text.slice(1);
+    return text;
+  }
+
+  function tooSoon(storage, ms) {
+    if (!writeClock || !storage) return false;
+    var prev = writeClock.get(storage);
+    return typeof prev === 'number' && ms - prev < WRITE_MS;
+  }
+
+  function markWritten(storage, ms) {
+    if (writeClock && storage) writeClock.set(storage, ms);
+  }
+
+  function declaredList(patch, env) {
+    var src = env && Array.isArray(env.declared)
+      ? env.declared
+      : (patch && Array.isArray(patch.declared) ? patch.declared : []);
+    var out = [];
+    var seen = {};
     var i;
-    for (i = 0; i < keys.length && count < STAT_LIMIT; i++) {
-      if (!snakeId(keys[i]) || !finiteNumber(stats[keys[i]])) continue;
-      out[keys[i]] = stats[keys[i]];
-      count += 1;
+    for (i = 0; i < src.length && out.length < STAT_LIMIT; i++) {
+      var item = src[i];
+      var key = typeof item === 'string' ? item : (item && item.key);
+      if (!snakeId(key) || seen[key]) continue;
+      seen[key] = true;
+      out.push({
+        key: key,
+        monotonic: !!(item && typeof item === 'object' && item.monotonic)
+      });
     }
     return out;
   }
 
-  function mergeStats(prev, patch) {
-    var merged = cleanStats(prev);
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return merged;
-    var keys = Object.keys(patch);
+  function mergeStats(prev, patch, declared) {
+    var prevStats = prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {};
+    var nextStats = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {};
+    var out = {};
     var i;
-    for (i = 0; i < keys.length; i++) {
-      if (!snakeId(keys[i]) || !finiteNumber(patch[keys[i]])) continue;
-      merged[keys[i]] = patch[keys[i]];
+    for (i = 0; i < declared.length; i++) {
+      var key = declared[i].key;
+      var hasNew = Object.prototype.hasOwnProperty.call(nextStats, key) && finiteNumber(nextStats[key]);
+      var hasOld = Object.prototype.hasOwnProperty.call(prevStats, key) && finiteNumber(prevStats[key]);
+      if (declared[i].monotonic) {
+        if (hasNew && hasOld) out[key] = Math.max(prevStats[key], nextStats[key]);
+        else if (hasNew) out[key] = nextStats[key];
+        else if (hasOld) out[key] = prevStats[key];
+      } else if (hasNew) {
+        out[key] = nextStats[key];
+      } else if (hasOld) {
+        out[key] = prevStats[key];
+      }
     }
-    return cleanStats(merged);
+    return out;
   }
 
   function isRecord(data, slug) {
-    return !!data && typeof data === 'object'
+    return !!data && typeof data === 'object' && !Array.isArray(data)
       && data.v === 1
       && data.slug === slug
       && data.stats && typeof data.stats === 'object' && !Array.isArray(data.stats)
@@ -91,15 +152,23 @@
     }
   }
 
-  function readRecord(raw, slug) {
-    if (raw == null || raw === '') return null;
+  function classify(raw, slug) {
+    if (raw == null || raw === '') return { state: 'missing' };
     try {
       var data = JSON.parse(raw);
-      if (!isRecord(data, slug)) return null;
-      return data;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return { state: 'corrupt' };
+      if (data.v !== 1 || data.slug !== slug) return { state: 'corrupt' };
+      if (!isRecord(data, slug)) return { state: 'corrupt' };
+      return { state: 'ok', record: data };
     } catch (e) {
-      return null;
+      return { state: 'corrupt' };
     }
+  }
+
+  function quarantine(storage, slug, raw) {
+    try {
+      storage.setItem(corruptKey(slug), String(raw));
+    } catch (e) {}
   }
 
   function unionLogros(prevLogros, prevHitos, incoming, nowIso) {
@@ -139,10 +208,19 @@
 
   function metaUpdate(slug, version, patch, env) {
     try {
+      if (isDemo(env)) return null;
       var storage = resolveStorage(env);
       if (!storage) return null;
+      var ms = rateMs(env);
+      if (tooSoon(storage, ms)) {
+        var cached = classify(readRaw(storage, slug), slug);
+        return cached.state === 'ok' ? cached.record : null;
+      }
+      var raw = readRaw(storage, slug);
+      var classified = classify(raw, slug);
+      var prev = classified.state === 'ok' ? classified.record : null;
+      if (classified.state === 'corrupt') quarantine(storage, slug, raw);
       var nowIso = stampOf(resolveNow(env));
-      var prev = readRecord(readRaw(storage, slug), slug);
       var achievements = unionLogros(
         prev ? prev.logros : [],
         prev ? prev.hitos : {},
@@ -152,13 +230,14 @@
       var record = {
         v: 1,
         slug: slug,
-        version: String(version),
+        version: plainVersion(version),
         updatedAt: nowIso,
-        stats: mergeStats(prev ? prev.stats : {}, patch && patch.stats),
+        stats: mergeStats(prev ? prev.stats : {}, patch && patch.stats, declaredList(patch, env)),
         logros: achievements.logros,
         hitos: achievements.hitos
       };
       storage.setItem(keyFor(slug), JSON.stringify(record));
+      markWritten(storage, ms);
       notifyParent(resolveWindow(env), slug, record);
       return record;
     } catch (e) {
@@ -168,13 +247,12 @@
 
   function metaBackfill(slug, version, derive, env) {
     try {
+      if (isDemo(env)) return null;
       var storage = resolveStorage(env);
       if (!storage) return null;
       var raw = readRaw(storage, slug);
-      if (raw != null && raw !== '') {
-        var existing = readRecord(raw, slug);
-        if (existing) return existing;
-      }
+      var classified = classify(raw, slug);
+      if (classified.state === 'ok') return classified.record;
       var built = { stats: {}, logros: [] };
       try {
         var derived = typeof derive === 'function' ? derive(storage) : null;

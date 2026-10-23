@@ -5,7 +5,7 @@
 
   var ENGINE_ROOT = 'https://juliangdeveloper.github.io/piano-transcribe/engine/v1/';
   var ENGINE_KEY = 'piano-transcribe.engine';
-  var APP_VERSION = '1.12.0';
+  var APP_VERSION = '1.12.1';
   var SCORE = { bpm: 80, timeSig: '4/4', clef: 'treble' };
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -597,10 +597,12 @@
     try { progress.load(); } catch (eMeta) {}
   }
 
-  window.addEventListener('pagehide', function () {
+  function flushProgress() {
     if (!progress) return;
     try { progress.flush(); } catch (eHide) {}
-  });
+  }
+  window.addEventListener('pagehide', flushProgress);
+  window.addEventListener('beforeunload', flushProgress);
 
   elVersion.textContent = 'v' + APP_VERSION;
   elBtn.disabled = true;

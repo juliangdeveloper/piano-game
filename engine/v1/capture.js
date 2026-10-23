@@ -178,7 +178,7 @@ function clarifyThresholdForMidi(midi, opts) {
 }
 
 var INTERFACE = 1;
-var VERSION = '1.12.0';
+var VERSION = '1.12.1';
 var HOP_MS = 20;
 
 var MIN_RUN = 2;

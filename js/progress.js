@@ -15,6 +15,15 @@
   var SLUG = 'piano-transcribe';
   var WRITE_MS = 1000;
 
+  // Claves declaradas (máximo 20), en el orden de guardado.
+  // monotonic: totales, conteos y mejores marcas; no bajan.
+  var STATS = [
+    { key: 'sessions', monotonic: true }, // sesiones de escucha abiertas
+    { key: 'notes_captured_total', monotonic: true }, // notas capturadas en total
+    { key: 'longest_session_notes', monotonic: true }, // máximo de notas en una sesión
+    { key: 'chords_captured', monotonic: true } // acordes: cada entrada a dos o más notas
+  ];
+
   // Ids estables. No se renombran ni se reutilizan. La condición es el umbral.
   var ACHIEVEMENTS = [
     // first_note: notes_captured_total >= 1
@@ -44,12 +53,10 @@
   ];
 
   function emptyStats() {
-    return {
-      sessions: 0,
-      notes_captured_total: 0,
-      longest_session_notes: 0,
-      chords_captured: 0
-    };
+    var stats = {};
+    var i;
+    for (i = 0; i < STATS.length; i++) stats[STATS[i].key] = 0;
+    return stats;
   }
 
   function num(value) {
@@ -71,13 +78,29 @@
     return { stats: stats, logros: logrosFor(stats) };
   }
 
+  function locationSearch(win) {
+    try {
+      if (!win && typeof window !== 'undefined') win = window;
+      if (win && win.location && typeof win.location.search === 'string') return win.location.search;
+    } catch (e) {}
+    return '';
+  }
+
+  function searchIsDemo(search) {
+    return /(?:^|[?&])demo=(?:1|true)(?:&|$)/.test(search || '')
+      || /(?:^|[?&])preview=(?:1|true)(?:&|$)/.test(search || '');
+  }
+
   function createTracker(opts) {
     opts = opts || {};
     var version = opts.version || '';
-    var env = {
+    var demo = opts.demo === true || searchIsDemo(locationSearch(opts.window));
+    var envBase = {
       localStorage: opts.localStorage,
       now: opts.now,
-      window: opts.window
+      window: opts.window,
+      declared: STATS,
+      demo: demo
     };
     var clock = typeof opts.clock === 'function' ? opts.clock : function () { return Date.now(); };
     var setTimer = typeof opts.setTimer === 'function' ? opts.setTimer : function (fn, ms) {
@@ -94,31 +117,67 @@
     var lastWrite = 0;
     var dirty = false;
 
+    function storageOf() {
+      if (envBase.localStorage) return envBase.localStorage;
+      if (typeof localStorage !== 'undefined') return localStorage;
+      return null;
+    }
+
+    function readRaw() {
+      try {
+        var storage = storageOf();
+        if (!storage) return null;
+        return storage.getItem(Meta.keyFor(SLUG));
+      } catch (e) {
+        return null;
+      }
+    }
+
     function snapshot() {
+      var out = {};
+      var i;
+      for (i = 0; i < STATS.length; i++) out[STATS[i].key] = stats[STATS[i].key];
+      return out;
+    }
+
+    function callEnv() {
+      var ms = clock();
       return {
-        sessions: stats.sessions,
-        notes_captured_total: stats.notes_captured_total,
-        longest_session_notes: stats.longest_session_notes,
-        chords_captured: stats.chords_captured
+        localStorage: envBase.localStorage,
+        window: envBase.window,
+        declared: STATS,
+        demo: demo,
+        now: envBase.now != null ? envBase.now : new Date(ms),
+        nowMs: ms
       };
     }
 
-    function write() {
-      if (!Meta || typeof Meta.metaUpdate !== 'function') return null;
-      lastWrite = clock();
-      dirty = false;
-      var callEnv = {
-        localStorage: env.localStorage,
-        window: env.window,
-        now: env.now != null ? env.now : new Date(lastWrite)
-      };
-      return Meta.metaUpdate(SLUG, version, {
+    function commit() {
+      if (demo || !dirty || !Meta || typeof Meta.metaUpdate !== 'function') return null;
+      var before = readRaw();
+      var record = Meta.metaUpdate(SLUG, version, {
         stats: snapshot(),
         logros: logrosFor(stats)
-      }, callEnv);
+      }, callEnv());
+      var after = readRaw();
+      if (before !== after) {
+        lastWrite = clock();
+        dirty = false;
+        return record;
+      }
+      if (record && !timer) {
+        var wait = WRITE_MS - (clock() - lastWrite);
+        if (wait < 1) wait = WRITE_MS;
+        timer = setTimer(function () {
+          timer = 0;
+          commit();
+        }, wait);
+      }
+      return record;
     }
 
     function schedule() {
+      if (demo) return;
       dirty = true;
       var elapsed = clock() - lastWrite;
       if (elapsed >= WRITE_MS) {
@@ -126,37 +185,40 @@
           clearTimer(timer);
           timer = 0;
         }
-        write();
+        commit();
         return;
       }
       if (timer) return;
       timer = setTimer(function () {
         timer = 0;
-        write();
+        commit();
       }, WRITE_MS - elapsed);
     }
 
     function applyRecord(record) {
       if (!record || !record.stats) return;
-      stats.sessions = num(record.stats.sessions);
-      stats.notes_captured_total = num(record.stats.notes_captured_total);
-      stats.longest_session_notes = num(record.stats.longest_session_notes);
-      stats.chords_captured = num(record.stats.chords_captured);
+      var i;
+      for (i = 0; i < STATS.length; i++) {
+        stats[STATS[i].key] = num(record.stats[STATS[i].key]);
+      }
     }
 
     return {
       load: function () {
+        if (demo) return null;
+        var before = readRaw();
         var record = null;
         if (Meta && typeof Meta.metaBackfill === 'function') {
-          record = Meta.metaBackfill(SLUG, version, deriveLegacy, env);
+          record = Meta.metaBackfill(SLUG, version, deriveLegacy, callEnv());
         }
         applyRecord(record);
-        lastWrite = clock();
+        if (before !== readRaw()) lastWrite = clock();
+        else lastWrite = clock() - WRITE_MS;
         dirty = false;
         return record;
       },
       beginSession: function () {
-        if (sessionOpen) return;
+        if (demo || sessionOpen) return;
         sessionOpen = true;
         sessionNotes = 0;
         chordLive = false;
@@ -164,7 +226,7 @@
         schedule();
       },
       endSession: function () {
-        if (!sessionOpen) return;
+        if (demo || !sessionOpen) return;
         sessionOpen = false;
         chordLive = false;
         if (sessionNotes > stats.longest_session_notes) {
@@ -173,6 +235,7 @@
         schedule();
       },
       captureNote: function (heldCount) {
+        if (demo) return;
         var held = typeof heldCount === 'number' && isFinite(heldCount) ? heldCount : 1;
         stats.notes_captured_total += 1;
         if (sessionOpen) {
@@ -195,18 +258,20 @@
         return snapshot();
       },
       flush: function () {
-        if (!dirty) return null;
+        if (demo || !dirty) return null;
+        if (clock() - lastWrite < WRITE_MS) return null;
         if (timer) {
           clearTimer(timer);
           timer = 0;
         }
-        return write();
+        return commit();
       }
     };
   }
 
   return {
     SLUG: SLUG,
+    STATS: STATS,
     ACHIEVEMENTS: ACHIEVEMENTS,
     emptyStats: emptyStats,
     logrosFor: logrosFor,
