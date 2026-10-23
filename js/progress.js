@@ -140,25 +140,26 @@
       return out;
     }
 
-    function callEnv() {
+    function callEnv(force) {
       var ms = clock();
       return {
         localStorage: envBase.localStorage,
         window: envBase.window,
         declared: STATS,
         demo: demo,
+        force: force === true,
         now: envBase.now != null ? envBase.now : new Date(ms),
         nowMs: ms
       };
     }
 
-    function commit() {
+    function commit(force) {
       if (demo || !dirty || !Meta || typeof Meta.metaUpdate !== 'function') return null;
       var before = readRaw();
       var record = Meta.metaUpdate(SLUG, version, {
         stats: snapshot(),
         logros: logrosFor(stats)
-      }, callEnv());
+      }, callEnv(force));
       var after = readRaw();
       if (before !== after) {
         lastWrite = clock();
@@ -259,14 +260,31 @@
       },
       flush: function () {
         if (demo || !dirty) return null;
-        if (clock() - lastWrite < WRITE_MS) return null;
         if (timer) {
           clearTimer(timer);
           timer = 0;
         }
-        return commit();
+        return commit(true);
       }
     };
+  }
+
+  function bindLifecycle(tracker, target, doc) {
+    if (!tracker || typeof tracker.flush !== 'function') return;
+    function run() {
+      try { tracker.flush(); } catch (e) {}
+    }
+    if (target && typeof target.addEventListener === 'function') {
+      target.addEventListener('pagehide', run);
+    }
+    var visTarget = doc || target;
+    if (visTarget && typeof visTarget.addEventListener === 'function') {
+      visTarget.addEventListener('visibilitychange', function () {
+        var state = '';
+        try { state = visTarget.visibilityState || ''; } catch (e2) {}
+        if (state === 'hidden') run();
+      });
+    }
   }
 
   return {
@@ -276,6 +294,7 @@
     emptyStats: emptyStats,
     logrosFor: logrosFor,
     deriveLegacy: deriveLegacy,
-    createTracker: createTracker
+    createTracker: createTracker,
+    bindLifecycle: bindLifecycle
   };
 });

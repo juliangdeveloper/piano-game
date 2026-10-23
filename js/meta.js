@@ -212,7 +212,7 @@
       var storage = resolveStorage(env);
       if (!storage) return null;
       var ms = rateMs(env);
-      if (tooSoon(storage, ms)) {
+      if (!(env && env.force === true) && tooSoon(storage, ms)) {
         var cached = classify(readRaw(storage, slug), slug);
         return cached.state === 'ok' ? cached.record : null;
       }

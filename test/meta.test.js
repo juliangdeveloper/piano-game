@@ -11,7 +11,7 @@ const SLUG = 'piano-transcribe';
 const KEY = 'meta.v1.piano-transcribe';
 const CORRUPT = 'meta.v1.piano-transcribe.corrupt';
 const WHEN = new Date('2026-10-23T18:00:00.000Z');
-const VERSION = '1.12.1';
+const VERSION = '1.12.2';
 
 function memoryStorage(initial) {
   const data = Object.assign({}, initial || {});
@@ -313,10 +313,11 @@ test('demo y preview no escriben ni avisan', () => {
       location: { origin: 'https://juliangdeveloper.github.io', search: search },
       parent: { postMessage: function () { posts.push(1); } }
     };
-    const direct = Meta.metaUpdate(SLUG, VERSION, { stats: { sessions: 3 }, logros: ['first_session'] }, {
+    const direct =     Meta.metaUpdate(SLUG, VERSION, { stats: { sessions: 3 }, logros: ['first_session'] }, {
       localStorage: storage,
       now: WHEN,
       declared: Progress.STATS,
+      force: true,
       window: win
     });
     assert.strictEqual(direct, null);
@@ -403,9 +404,8 @@ test('una sesión cuenta acordes al entrar en dos notas y no repite la sesión a
   tracker.captureNote(1);
   tracker.captureNote(2);
   tracker.endSession();
-  assert.strictEqual(tracker.flush(), null);
-  now = 1000;
   const record = tracker.flush();
+  assert.strictEqual(tracker.flush(), null);
   assert.strictEqual(queued, null);
   assert.deepStrictEqual(record.stats, {
     sessions: 1,
@@ -457,8 +457,43 @@ test('el guardado de progreso espera un segundo y escribe el último conteo', ()
   assert.strictEqual(immediate.stats.notes_captured_total, 3);
 });
 
-test('backfill y flush cuentan en el máximo de una escritura por segundo', () => {
+test('en uso normal hay como máximo una escritura por segundo, contando el backfill', () => {
   let now = 10000;
+  const keys = [];
+  const backing = memoryStorage();
+  const storage = {
+    getItem: function (key) { return backing.getItem(key); },
+    setItem: function (key, value) {
+      keys.push(key);
+      backing.setItem(key, value);
+    }
+  };
+  const tracker = Progress.createTracker({
+    version: VERSION,
+    localStorage: storage,
+    clock: function () { return now; },
+    setTimer: function () { return 1; },
+    clearTimer: function () {},
+    window: sameWindow()
+  });
+  tracker.load();
+  assert.deepStrictEqual(keys, [KEY]);
+  tracker.flush();
+  assert.deepStrictEqual(keys, [KEY]);
+  tracker.beginSession();
+  tracker.captureNote(1);
+  now = 10500;
+  tracker.captureNote(1);
+  assert.deepStrictEqual(keys, [KEY]);
+  now = 11000;
+  tracker.captureNote(1);
+  assert.deepStrictEqual(keys, [KEY, KEY]);
+  assert.strictEqual(JSON.parse(backing.getItem(KEY)).stats.notes_captured_total, 3);
+  assert.strictEqual(JSON.parse(backing.getItem(KEY)).stats.sessions, 1);
+});
+
+test('pagehide y ocultar la página guardan un cambio pendiente antes de un segundo', () => {
+  let now = 20000;
   const keys = [];
   const posts = [];
   const backing = memoryStorage();
@@ -467,6 +502,16 @@ test('backfill y flush cuentan en el máximo de una escritura por segundo', () =
     setItem: function (key, value) {
       keys.push(key);
       backing.setItem(key, value);
+    }
+  };
+  const handlers = {};
+  const target = {
+    visibilityState: 'visible',
+    addEventListener: function (type, fn) {
+      handlers[type] = fn;
+    },
+    emit: function (type) {
+      if (handlers[type]) handlers[type]();
     }
   };
   const win = {
@@ -481,28 +526,36 @@ test('backfill y flush cuentan en el máximo de una escritura por segundo', () =
     clearTimer: function () {},
     window: win
   });
+  Progress.bindLifecycle(tracker, target, target);
   tracker.load();
   assert.deepStrictEqual(keys, [KEY]);
   assert.strictEqual(posts.length, 1);
-  tracker.flush();
+  target.emit('pagehide');
   assert.deepStrictEqual(keys, [KEY]);
   tracker.beginSession();
   tracker.captureNote(1);
+  now = 20400;
   assert.deepStrictEqual(keys, [KEY]);
-  assert.strictEqual(posts.length, 1);
-  now = 10500;
-  assert.strictEqual(tracker.flush(), null);
-  assert.deepStrictEqual(keys, [KEY]);
-  assert.strictEqual(posts.length, 1);
-  now = 11000;
-  const record = tracker.flush();
+  target.emit('pagehide');
   assert.deepStrictEqual(keys, [KEY, KEY]);
   assert.strictEqual(posts.length, 2);
-  assert.strictEqual(record.stats.sessions, 1);
-  assert.strictEqual(record.stats.notes_captured_total, 1);
-  tracker.flush();
+  assert.strictEqual(JSON.parse(backing.getItem(KEY)).stats.notes_captured_total, 1);
+  target.emit('pagehide');
+  target.visibilityState = 'visible';
+  target.emit('visibilitychange');
   assert.deepStrictEqual(keys, [KEY, KEY]);
   assert.strictEqual(posts.length, 2);
+  tracker.captureNote(1);
+  now = 20600;
+  target.visibilityState = 'hidden';
+  target.emit('visibilitychange');
+  assert.deepStrictEqual(keys, [KEY, KEY, KEY]);
+  assert.strictEqual(posts.length, 3);
+  assert.strictEqual(JSON.parse(backing.getItem(KEY)).stats.notes_captured_total, 2);
+  target.visibilityState = 'hidden';
+  target.emit('visibilitychange');
+  assert.deepStrictEqual(keys, [KEY, KEY, KEY]);
+  assert.strictEqual(posts.length, 3);
 });
 
 test('tras cargar y tocar, las claves viejas siguen byte a byte', () => {
