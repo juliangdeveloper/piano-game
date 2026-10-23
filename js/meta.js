@@ -15,6 +15,47 @@
   var WRITE_MS = 1000;
   var writeClock = typeof WeakMap === 'function' ? new WeakMap() : null;
 
+  // Project status, set by hand and bumped with the version. Never computed from play.
+  // fase 1-6: Idea, Definición, Diseño, Construcción, Validación, Lanzamiento y mantenimiento.
+  // fase_estado 0-4: pendiente, en curso, bloqueada, en revisión, completada.
+  var PROYECTO = {
+    objetivo: 'Ver en partitura, en vivo, lo que se toca en el piano por micrófono o MIDI, y servir ese motor de notas a otras apps.',
+    fase: 6,
+    fase_estado: 1,
+    fases_completadas: 5
+  };
+
+  var proyectoSource = PROYECTO;
+
+  function proyectoInt(n, lo, hi) {
+    return typeof n === 'number' && Number.isInteger(n) && n >= lo && n <= hi;
+  }
+
+  // Clean copy of a proyecto block, or null when any field is missing or out of range.
+  function metaProyecto(p) {
+    try {
+      if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+      var o = p.objetivo;
+      if (typeof o !== 'string' || !o.trim() || Array.from(o).length > 140) return null;
+      if (!proyectoInt(p.fase, 1, 6) || !proyectoInt(p.fase_estado, 0, 4) || !proyectoInt(p.fases_completadas, 0, 6)) return null;
+      return { objetivo: o, fase: p.fase, fase_estado: p.fase_estado, fases_completadas: p.fases_completadas };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Tests only: swap the block the writer uses (null restores PROYECTO).
+  function metaSetProyecto(p) {
+    proyectoSource = p === null ? PROYECTO : p;
+  }
+
+  // Adds the current proyecto block to a record being written, when it is valid.
+  function withProyecto(record) {
+    var p = metaProyecto(proyectoSource);
+    if (p) record.proyecto = p;
+    return record;
+  }
+
   function keyFor(slug) {
     return 'meta.v1.' + slug;
   }
@@ -236,6 +277,7 @@
         logros: achievements.logros,
         hitos: achievements.hitos
       };
+      withProyecto(record);
       storage.setItem(keyFor(slug), JSON.stringify(record));
       markWritten(storage, ms);
       notifyParent(resolveWindow(env), slug, record);
@@ -270,6 +312,9 @@
   return {
     keyFor: keyFor,
     metaUpdate: metaUpdate,
-    metaBackfill: metaBackfill
+    metaBackfill: metaBackfill,
+    metaProyecto: metaProyecto,
+    metaSetProyecto: metaSetProyecto,
+    PROYECTO: PROYECTO
   };
 });
