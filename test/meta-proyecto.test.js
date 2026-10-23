@@ -56,7 +56,7 @@ test('an invalid block is left out and never throws', () => {
     Object.assign({}, P, { objetivo: '' }),
     Object.assign({}, P, { objetivo: 'a'.repeat(141) }),
     Object.assign({}, P, { objetivo: 5 }),
-    Object.assign({}, P, { fase: 0 }), Object.assign({}, P, { fase: 7 }),
+    Object.assign({}, P, { fase: 0 }), Object.assign({}, P, { fase: 8 }),
     Object.assign({}, P, { fase: 2.5 }), Object.assign({}, P, { fase: '4' }),
     Object.assign({}, P, { fase_estado: -1 }), Object.assign({}, P, { fase_estado: 5 }),
     Object.assign({}, P, { fases_completadas: 7 }), Object.assign({}, P, { fases_completadas: NaN }),
@@ -107,4 +107,9 @@ test('a stored record with a different proyecto gets the current block on the ne
   const second = mem({ [KEY]: JSON.stringify(old) });
   update(second, []);
   assert.strictEqual('proyecto' in JSON.parse(second.getItem(KEY)), false);
+});
+
+test('fase 7 (Descartada) is accepted', () => {
+  const D = Object.assign({}, Meta.PROYECTO, { fase: 7, fase_estado: 4 });
+  assert.deepStrictEqual(Meta.metaProyecto(D), D);
 });
