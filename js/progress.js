@@ -13,12 +13,15 @@
   var SLUG = 'piano-transcribe';
   var WRITE_MS = 1000;
 
-  var STATS = [
-    { key: 'sessions', monotonic: true },
-    { key: 'notes_captured_total', monotonic: true },
-    { key: 'longest_session_notes', monotonic: true },
-    { key: 'chords_captured', monotonic: true }
-  ];
+  var TIPO_STAT = Meta.TIPO_STAT;
+
+  var STATS = Object.freeze({
+    sessions: { tipo: TIPO_STAT.TOTAL_ACUMULADO, unidad: 'sesiones de captura' },
+    notes_captured_total: { tipo: TIPO_STAT.TOTAL_ACUMULADO, unidad: 'notas capturadas' },
+    longest_session_notes: { tipo: TIPO_STAT.MEJOR_MARCA, unidad: 'notas capturadas en una sesión' },
+    chords_captured: { tipo: TIPO_STAT.TOTAL_ACUMULADO, unidad: 'acordes capturados' }
+  });
+  var STAT_KEYS = Object.keys(STATS);
 
   var ACHIEVEMENTS = [
     { id: 'first_note', test: function (s) { return s.notes_captured_total >= 1; } },
@@ -38,7 +41,7 @@
   function emptyStats() {
     var stats = {};
     var i;
-    for (i = 0; i < STATS.length; i++) stats[STATS[i].key] = 0;
+    for (i = 0; i < STAT_KEYS.length; i++) stats[STAT_KEYS[i]] = 0;
     return stats;
   }
 
@@ -118,7 +121,7 @@
     function snapshot() {
       var out = {};
       var i;
-      for (i = 0; i < STATS.length; i++) out[STATS[i].key] = stats[STATS[i].key];
+      for (i = 0; i < STAT_KEYS.length; i++) out[STAT_KEYS[i]] = stats[STAT_KEYS[i]];
       return out;
     }
 
@@ -181,8 +184,8 @@
     function applyRecord(record) {
       if (!record || !record.stats) return;
       var i;
-      for (i = 0; i < STATS.length; i++) {
-        stats[STATS[i].key] = num(record.stats[STATS[i].key]);
+      for (i = 0; i < STAT_KEYS.length; i++) {
+        stats[STAT_KEYS[i]] = num(record.stats[STAT_KEYS[i]]);
       }
     }
 

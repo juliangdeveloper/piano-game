@@ -10,7 +10,7 @@ const SLUG = 'piano-transcribe';
 const KEY = 'meta.v1.piano-transcribe';
 const CORRUPT = 'meta.v1.piano-transcribe.corrupt';
 const WHEN = new Date('2026-10-23T18:00:00.000Z');
-const VERSION = '1.12.5';
+const VERSION = '1.12.6';
 
 function memoryStorage(initial) {
   const data = Object.assign({}, initial || {});
@@ -178,19 +178,19 @@ test('metaUpdate une logros, conserva hitos y descarta números no finitos', () 
 });
 
 test('el tope y el orden salen de las claves declaradas', () => {
-  assert.ok(Progress.STATS.length <= 20);
-  assert.deepStrictEqual(Progress.STATS.map(function (item) { return item.key; }), [
+  assert.ok(Object.keys(Progress.STATS).length <= 20);
+  assert.deepStrictEqual(Object.keys(Progress.STATS), [
     'sessions',
     'notes_captured_total',
     'longest_session_notes',
     'chords_captured'
   ]);
-  assert.ok(Progress.STATS.every(function (item) { return item.monotonic === true; }));
+  assert.ok(Object.keys(Progress.STATS).every(function (key) { return Meta.statConservaMaximo(Progress.STATS[key].tipo); }));
   const declared = [];
   const stats = { extra_blob: 1 };
   const names = [];
   for (let i = 0; i < 25; i++) {
-    declared.push({ key: 'k_' + i, monotonic: false });
+    declared.push({ key: 'k_' + i, tipo: 'valor_actual' });
     stats['k_' + i] = i;
     if (i < 20) names.push('k_' + i);
   }
@@ -206,7 +206,7 @@ test('el tope y el orden salen de las claves declaradas', () => {
 });
 
 test('las claves monotonicas no bajan y las demás se reemplazan', () => {
-  const declared = Progress.STATS.concat([{ key: 'take', monotonic: false }]);
+  const declared = Object.assign({}, Progress.STATS, { take: { tipo: Meta.TIPO_STAT.VALOR_ACTUAL, unidad: 'notas de la toma actual' } });
   const storage = memoryStorage();
   Meta.metaUpdate(SLUG, VERSION, {
     stats: {
