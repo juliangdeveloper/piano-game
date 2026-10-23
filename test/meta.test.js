@@ -11,7 +11,7 @@ const SLUG = 'piano-transcribe';
 const KEY = 'meta.v1.piano-transcribe';
 const CORRUPT = 'meta.v1.piano-transcribe.corrupt';
 const WHEN = new Date('2026-10-23T18:00:00.000Z');
-const VERSION = '1.12.2';
+const VERSION = '1.12.3';
 
 function memoryStorage(initial) {
   const data = Object.assign({}, initial || {});
@@ -69,7 +69,8 @@ test('un guardado viejo sin la clave meta produce ceros y no toca las claves exi
     updatedAt: '2026-10-23T18:00:00.000Z',
     stats: zeros(),
     logros: [],
-    hitos: {}
+    hitos: {},
+    proyecto: Object.assign({}, Meta.PROYECTO)
   });
   assert.strictEqual(record.version.indexOf('v'), -1);
   assert.deepStrictEqual(JSON.parse(storage.getItem(KEY)), record);
