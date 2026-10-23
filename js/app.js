@@ -5,7 +5,7 @@
 
   var ENGINE_ROOT = 'https://juliangdeveloper.github.io/piano-transcribe/engine/v1/';
   var ENGINE_KEY = 'piano-transcribe.engine';
-  var APP_VERSION = '1.11.0';
+  var APP_VERSION = '1.12.2';
   var SCORE = { bpm: 80, timeSig: '4/4', clef: 'treble' };
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -43,6 +43,7 @@
   var staffLastDraw = 0;
   var teleAt = 0;
   var silentTicks = 0;
+  var progress = null;
 
   function loadPianoEngine(root) {
     return fetch(root + 'version.txt?t=' + Date.now(), { cache: 'no-store' })
@@ -133,6 +134,7 @@
     elLog.classList.add('chrono');
     elLog.innerHTML = '';
     drawStaff();
+    if (progress) progress.beginSession();
   }
 
   function stopTimers() {
@@ -140,6 +142,7 @@
   }
 
   function stop() {
+    if (progress) progress.endSession();
     running = false;
     stopTimers();
     silentTicks = 0;
@@ -263,7 +266,10 @@
     var i;
     for (i = 0; i < out.events.length; i++) {
       var ev = out.events[i];
-      if (ev.type === 'on' && ev.fresh) pushTranscriptRow(ev);
+      if (ev.type === 'on' && ev.fresh) {
+        pushTranscriptRow(ev);
+        if (progress) progress.captureNote(out.held.length);
+      }
     }
     if (out.held.length) showHeld(out.held, out.reading);
     else if (out.events.length) renderOff();
@@ -341,7 +347,10 @@
         var freq = null;
         try { freq = engine.hzForNote(on.events[0].note, on.events[0].octave); } catch (err) {}
         showHeld(on.held, { midi: midiNum, cents: 0, clarity: 1, freq: freq, db: null });
-        if (on.events[0].fresh) pushTranscriptRow(on.events[0]);
+        if (on.events[0].fresh) {
+          pushTranscriptRow(on.events[0]);
+          if (progress) progress.captureNote(on.held.length);
+        }
       }
     } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
       var off = session.release(midiNum, 'midi', now);
@@ -582,6 +591,25 @@
       window.Vex.Flow.setMusicFont('Gonville');
     }
   } catch (eFont) {}
+
+  if (window.Progress && typeof window.Progress.createTracker === 'function') {
+    progress = window.Progress.createTracker({ version: APP_VERSION });
+    try { progress.load(); } catch (eMeta) {}
+  }
+
+  function flushProgress() {
+    if (!progress) return;
+    try { progress.flush(); } catch (eHide) {}
+  }
+  if (progress && window.Progress && typeof window.Progress.bindLifecycle === 'function') {
+    window.Progress.bindLifecycle(progress, window, document);
+  } else {
+    window.addEventListener('pagehide', flushProgress);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') flushProgress();
+    });
+  }
+  window.addEventListener('beforeunload', flushProgress);
 
   elVersion.textContent = 'v' + APP_VERSION;
   elBtn.disabled = true;
