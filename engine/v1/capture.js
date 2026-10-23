@@ -1,11 +1,8 @@
-// engine/v1/capture.js — motor de captura y partitura (interfaz 1).
-// Sin DOM y sin dibujar el pentagrama. Un solo archivo: el cliente carga
-// este módulo desde /engine/v1/capture.js?v=<versión>.
 'use strict';
 
 var A4_DEFAULT = 440;
 var WINDOW_SIZE = 4096;
-var MAX_LAG = 760;   // cubre C2 (~65.4 Hz) a 48 kHz
+var MAX_LAG = 760;
 var TAU_MIN = 2;
 var YIN_THRESHOLD = 0.15;
 var NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -15,7 +12,6 @@ function isValidBuffer(buffer) {
     buffer.length >= 2 * MAX_LAG;
 }
 
-// YIN: devuelve {freq, clarity} con freq=null si no hay tono fiable.
 function detectPitch(buffer, sampleRate, opts) {
   opts = opts || {};
   var clarityThreshold = (typeof opts.clarityThreshold === 'number')
@@ -27,17 +23,14 @@ function detectPitch(buffer, sampleRate, opts) {
 
   var n = Math.min(buffer.length, WINDOW_SIZE);
   var maxLag = Math.min(MAX_LAG, Math.floor(n / 2));
-  // Tope de lag: el rango de combate no busca C2. Sin tope se queda MAX_LAG.
   if (typeof opts.maxLag === 'number' && isFinite(opts.maxLag) && opts.maxLag > TAU_MIN) {
     maxLag = Math.min(maxLag, Math.floor(opts.maxLag));
   }
 
-  // Señal sin energía (ceros, silencio) → sin tono
   var energy = 0;
   for (var e = 0; e < n; e++) energy += buffer[e] * buffer[e];
   if (energy < 1e-9) return { freq: null, clarity: 0 };
 
-  // d(tau) — función de diferencia
   var d = new Float64Array(maxLag + 1);
   for (var tau = TAU_MIN; tau <= maxLag; tau++) {
     var sum = 0;
@@ -48,7 +41,6 @@ function detectPitch(buffer, sampleRate, opts) {
     d[tau] = sum;
   }
 
-  // d'(tau) — diferencia media normalizada acumulativa
   var dp = new Float64Array(maxLag + 1);
   dp[0] = 1;
   dp[1] = 1;
@@ -60,17 +52,15 @@ function detectPitch(buffer, sampleRate, opts) {
     running += d[tau2];
     dp[tau2] = d[tau2] * (tau2 - TAU_MIN + 1) / (running || 1);
     if (dp[tau2] < YIN_THRESHOLD) {
-      // primer valle por debajo del umbral → mejor τ local
       if (bestTau === -1 || dp[tau2] < bestDp) {
         bestTau = tau2;
         bestDp = dp[tau2];
       }
     } else if (bestTau !== -1) {
-      break; // fin del primer valle
+      break;
     }
   }
 
-  // si no hubo valle bajo el umbral → argmin global
   if (bestTau === -1) {
     for (var tau3 = TAU_MIN; tau3 <= maxLag; tau3++) {
       if (dp[tau3] < bestDp) {
@@ -82,10 +72,6 @@ function detectPitch(buffer, sampleRate, opts) {
 
   if (bestTau < 0) return { freq: null, clarity: 0 };
 
-  // Corrección de octava. Si el valle elegido es un múltiplo del periodo real
-  // (subarmónico: la nota suena una octava abajo), baja a τ/k cuando ese valle
-  // es casi igual de profundo. En graves del piano la fundamental es débil y
-  // el argmin global caía en 2T (E3→E2, D4→D3).
   var k, sub, j, lo, hi, m, mv;
   for (k = 4; k >= 2; k--) {
     sub = bestTau / k;
@@ -101,7 +87,6 @@ function detectPitch(buffer, sampleRate, opts) {
     }
   }
 
-  // Refinamiento parabólico con vecinos de d'(tau)
   var refinedTau = bestTau;
   var s0, s1, s2;
   if (bestTau > TAU_MIN && bestTau < maxLag) {
@@ -119,13 +104,9 @@ function detectPitch(buffer, sampleRate, opts) {
   if (clarity < 0) clarity = 0;
   if (clarity > 1) clarity = 1;
 
-  // v1.3.1: el detector SIEMPRE reporta la freq encontrada — la decisión de
-  // mostrarla es política del caller (umbral clarityThreshold). El threshold
-  // sigue existiendo como datos (app.js lo usa), pero ya no borra la medición.
   return { freq: sampleRate / refinedTau, clarity: clarity };
 }
 
-// Convierte Hz → {name, octave, cents, midi}. No chequea rango C2–C7.
 function noteFromFreq(freq, a4) {
   if (typeof freq !== 'number' || !isFinite(freq) || freq <= 0) return null;
   if (typeof a4 !== 'number' || !isFinite(a4) || a4 <= 0) a4 = A4_DEFAULT;
@@ -133,7 +114,6 @@ function noteFromFreq(freq, a4) {
   var midiFloat = 69 + 12 * Math.log2(freq / a4);
   var midi = Math.round(midiFloat);
   var cents = Math.round((midiFloat - midi) * 100);
-  // cents ∈ [-50, 50]
   if (cents > 50) { cents -= 100; midi += 1; }
   if (cents < -50) { cents += 100; midi -= 1; }
 
@@ -142,7 +122,6 @@ function noteFromFreq(freq, a4) {
   return { name: name, octave: octave, cents: cents, midi: midi };
 }
 
-// Frecuencia exacta de una nota (name ∈ NAMES, octava entera) dado A4.
 function hzForNote(name, octave, a4) {
   if (typeof a4 !== 'number' || !isFinite(a4) || a4 <= 0) a4 = A4_DEFAULT;
   var idx = NAMES.indexOf(name);
@@ -153,7 +132,6 @@ function hzForNote(name, octave, a4) {
   return a4 * Math.pow(2, (midi - 69) / 12);
 }
 
-// Número MIDI → {name, octave, cents:0, midi}. Fuera de 0–127 o no-entero → null.
 function noteFromMidi(midi) {
   if (typeof midi !== 'number' || !isFinite(midi) || midi % 1 !== 0) return null;
   if (midi < 0 || midi > 127) return null;
@@ -165,11 +143,6 @@ function noteFromMidi(midi) {
   };
 }
 
-/**
- * Umbral de claridad adaptativo: los agudos (C5+, midi ≥72) salen más débiles
- * del speaker del piano (rolloff físico) y su coherencia armónica real cae —
- * con umbral estricto 0.90 E5+ quedaba bajo el corte. Relajado a 0.78 arriba.
- */
 function clarifyThresholdForMidi(midi, opts) {
   var strict = 0.90, relaxed = 0.78;
   if (opts && typeof opts.strict === 'number') strict = opts.strict;
@@ -178,7 +151,7 @@ function clarifyThresholdForMidi(midi, opts) {
 }
 
 var INTERFACE = 1;
-var VERSION = '1.12.3';
+var VERSION = '1.12.4';
 var HOP_MS = 20;
 
 var MIN_RUN = 2;
@@ -789,9 +762,6 @@ function statusLine(opts) {
   return base;
 }
 
-// --- dos voces: suma armónica, picos locales y un valle entre ellos ---
-// La segunda voz solo entra si no se explica como armónico de la primera.
-// Por debajo de C3 se deja la decisión al detector monofónico.
 
 var POLY_MIN_MIDI = 48;
 var SAL_W = [1, 0.65, 0.45, 0.32, 0.22, 0.15, 0.1, 0.07];

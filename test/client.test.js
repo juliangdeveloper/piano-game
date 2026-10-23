@@ -1,4 +1,3 @@
-// test/client.test.js — la página solo entra al motor por el URL público.
 'use strict';
 
 const { test } = require('node:test');
@@ -28,10 +27,10 @@ test('la interfaz carga /engine/v1/ y no los archivos internos', () => {
   assert.equal(/js\/pitch\.js/.test(html), false);
   assert.equal(/js\/score\.js/.test(html), false);
   assert.equal(/js\/gate\.js/.test(html), false);
-  assert.ok(html.includes('js/meta.js?v=1.12.3'));
-  assert.ok(html.includes('js/progress.js?v=1.12.3'));
-  assert.ok(html.includes('js/vexflow.js?v=1.12.3'));
-  assert.ok(html.includes('js/app.js?v=1.12.3'));
+  assert.ok(html.includes('js/meta.js?v=1.12.4'));
+  assert.ok(html.includes('js/progress.js?v=1.12.4'));
+  assert.ok(html.includes('js/vexflow.js?v=1.12.4'));
+  assert.ok(html.includes('js/app.js?v=1.12.4'));
   assert.ok(html.indexOf('js/meta.js') < html.indexOf('js/progress.js'));
   assert.ok(html.indexOf('js/progress.js') < html.indexOf('js/app.js'));
   assert.ok(app.includes('progress.load'));

@@ -1,4 +1,3 @@
-// test/fft.test.js — TDD para js/fft.js (radix-2, espectro de magnitud con Hann)
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -50,7 +49,7 @@ test('FFT4: Parseval (DFT sin normalizar) — Σ2|X[k]|² ≈ N·mean(w²)·Σ|x
   const w = FFT.hann(N);
   let wE = 0;
   for (let i = 0; i < N; i++) wE += w[i] * w[i];
-  const expected = N * (wE / N) * timeE; // N·mean(w²)·energía temporal
+  const expected = N * (wE / N) * timeE;
   const ratio = freqE / expected;
   assert.ok(ratio > 0.9 && ratio < 1.1, `freqE=${freqE}, esperaba ≈${expected.toFixed(1)}, ratio=${ratio.toFixed(3)}`);
 });

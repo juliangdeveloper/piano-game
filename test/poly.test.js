@@ -1,4 +1,3 @@
-// test/poly.test.js — dos voces opt-in, sin cambiar el camino de una nota.
 'use strict';
 
 const { test } = require('node:test');

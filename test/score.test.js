@@ -1,4 +1,3 @@
-// test/score.test.js — TDD para js/score.js (cuantización EventStream → partitura)
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -6,7 +5,7 @@ const path = require('node:path');
 const Score = require(path.join(__dirname, '..', 'js', 'score.js'));
 
 const BPM = 80;
-const Q = 60000 / BPM; // 750 ms = negra
+const Q = 60000 / BPM;
 
 function ev(midi, t0, t1, extra) {
   return Object.assign({
@@ -84,7 +83,7 @@ test('Q9: midi < 48 (C3) se escribe 8vb (C2=36 → c/3); C3=48 sin 8vb', () => {
 test('Q10: hueco de una negra entre notas → silencio de negra', () => {
   const events = [
     ev(60, 0, 750),
-    ev(64, 1500, 2250) // gap 750ms
+    ev(64, 1500, 2250)
   ];
   const score = Score.eventsToScore(events, { bpm: 80 });
   const notes = allNotes(score);
@@ -102,7 +101,7 @@ test('Q10: hueco de una negra entre notas → silencio de negra', () => {
 test('Q11: hueco minúsculo (<½ semicorchea) no inserta silencio', () => {
   const events = [
     ev(60, 0, 750),
-    ev(62, 780, 1530) // gap 30ms
+    ev(62, 780, 1530)
   ];
   const score = Score.eventsToScore(events, { bpm: 80 });
   const notes = allNotes(score);
@@ -128,7 +127,7 @@ test('Q13: defaults ♩=80, 4/4, treble; compás de 16 semicorcheas', () => {
   assert.strictEqual(d.bpm, 80);
   assert.strictEqual(d.timeSig, '4/4');
   assert.strictEqual(d.clef, 'treble');
-  const events = [ev(60, 0, 3000)]; // redonda = 1 compás
+  const events = [ev(60, 0, 3000)];
   const score = Score.eventsToScore(events);
   assert.strictEqual(score.bpm, 80);
   assert.strictEqual(score.timeSigStr, '4/4');

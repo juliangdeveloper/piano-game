@@ -1,5 +1,3 @@
-// test/pitch.test.js — tests Node (assert nativo, sin deps) para js/pitch.js
-// TDD: escritos ANTES de la implementación.
 'use strict';
 
 const test = require('node:test');
@@ -10,16 +8,13 @@ const Pitch = require(path.join(__dirname, '..', 'js', 'pitch.js'));
 const N = 4096;
 const TAU = Math.PI * 2;
 
-// --- helpers ---------------------------------------------------------------
 
-// Seno puro en un buffer de N muestras
 function sine(freq, sampleRate, n = N) {
   const buf = new Float32Array(n);
   for (let i = 0; i < n; i++) buf[i] = Math.sin(TAU * freq * i / sampleRate);
   return buf;
 }
 
-// Señal tipo piano: fundamental + armónicos
 function pianoTone(freq, sampleRate, n = N) {
   const buf = new Float32Array(n);
   for (let i = 0; i < n; i++) {
@@ -32,7 +27,6 @@ function pianoTone(freq, sampleRate, n = N) {
   return buf;
 }
 
-// Ruido blanco determinista: LCG con semilla fija (Park–Miller)
 function whiteNoise(seed, n = N) {
   const buf = new Float32Array(n);
   let s = seed >>> 0;
@@ -43,7 +37,6 @@ function whiteNoise(seed, n = N) {
   return buf;
 }
 
-// --- tests -----------------------------------------------------------------
 
 test('1: seno 440 Hz @48000 → A4, claridad > 0.9, cents 0±2', () => {
   const { freq, clarity } = Pitch.detectPitch(sine(440, 48000), 48000);
@@ -116,8 +109,6 @@ test('8: buffer de 100 muestras → freq null sin lanzar excepción', () => {
 test('9: hzForNote A4 = 440; hzForNote C4 @442 ≈ 262.81 (12-TET)', () => {
   assert.strictEqual(Pitch.hzForNote('A', 4), 440);
   const c4 = Pitch.hzForNote('C', 4, 442);
-  // SPEC decía ≈263.74, pero 12-TET da 442·2^(-9/12) ≈ 262.8148.
-  // 263.74 no corresponde a ningún intervalo temperado de A4=442.
   assert.ok(Math.abs(c4 - 262.81477241560134) <= 0.05, `hzForNote(C,4,442)=${c4}`);
   const c4Ref = Pitch.hzForNote('C', 4);
   assert.ok(Math.abs(c4Ref - 261.6256) <= 0.01, `hzForNote(C,4)=${c4Ref}`);
@@ -210,12 +201,11 @@ test('16: maxLag acota la búsqueda y un seno E2 sigue siendo E2', () => {
 });
 
 test('14: clarifyThresholdForMidi — 0.90 graves/C5-, 0.78 agudos C5+ (rolloff de speaker)', () => {
-  assert.strictEqual(Pitch.clarifyThresholdForMidi(48), 0.90); // C3
-  assert.strictEqual(Pitch.clarifyThresholdForMidi(71), 0.90); // B4: aún estricto
-  assert.strictEqual(Pitch.clarifyThresholdForMidi(72), 0.78); // C5: primero en fallar
-  assert.strictEqual(Pitch.clarifyThresholdForMidi(76), 0.78); // E5
-  assert.strictEqual(Pitch.clarifyThresholdForMidi(81), 0.78); // A5
-  assert.strictEqual(Pitch.clarifyThresholdForMidi(96), 0.78); // C7
-  // opts override gana
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(48), 0.90);
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(71), 0.90);
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(72), 0.78);
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(76), 0.78);
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(81), 0.78);
+  assert.strictEqual(Pitch.clarifyThresholdForMidi(96), 0.78);
   assert.strictEqual(Pitch.clarifyThresholdForMidi(72, { strict: 0.95, relaxed: 0.85 }), 0.85);
 });

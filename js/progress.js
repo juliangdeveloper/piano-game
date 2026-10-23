@@ -1,5 +1,3 @@
-// js/progress.js — progreso de piano-transcribe sobre meta.v1.
-// UMD: module.exports (Node) + window.Progress (navegador).
 'use strict';
 
 (function (root, factory) {
@@ -15,40 +13,25 @@
   var SLUG = 'piano-transcribe';
   var WRITE_MS = 1000;
 
-  // Claves declaradas (máximo 20), en el orden de guardado.
-  // monotonic: totales, conteos y mejores marcas; no bajan.
   var STATS = [
-    { key: 'sessions', monotonic: true }, // sesiones de escucha abiertas
-    { key: 'notes_captured_total', monotonic: true }, // notas capturadas en total
-    { key: 'longest_session_notes', monotonic: true }, // máximo de notas en una sesión
-    { key: 'chords_captured', monotonic: true } // acordes: cada entrada a dos o más notas
+    { key: 'sessions', monotonic: true },
+    { key: 'notes_captured_total', monotonic: true },
+    { key: 'longest_session_notes', monotonic: true },
+    { key: 'chords_captured', monotonic: true }
   ];
 
-  // Ids estables. No se renombran ni se reutilizan. La condición es el umbral.
   var ACHIEVEMENTS = [
-    // first_note: notes_captured_total >= 1
     { id: 'first_note', test: function (s) { return s.notes_captured_total >= 1; } },
-    // ten_notes: notes_captured_total >= 10
     { id: 'ten_notes', test: function (s) { return s.notes_captured_total >= 10; } },
-    // hundred_notes: notes_captured_total >= 100
     { id: 'hundred_notes', test: function (s) { return s.notes_captured_total >= 100; } },
-    // five_hundred_notes: notes_captured_total >= 500
     { id: 'five_hundred_notes', test: function (s) { return s.notes_captured_total >= 500; } },
-    // thousand_notes: notes_captured_total >= 1000
     { id: 'thousand_notes', test: function (s) { return s.notes_captured_total >= 1000; } },
-    // first_session: sessions >= 1
     { id: 'first_session', test: function (s) { return s.sessions >= 1; } },
-    // ten_sessions: sessions >= 10
     { id: 'ten_sessions', test: function (s) { return s.sessions >= 10; } },
-    // fifty_sessions: sessions >= 50
     { id: 'fifty_sessions', test: function (s) { return s.sessions >= 50; } },
-    // first_chord: chords_captured >= 1
     { id: 'first_chord', test: function (s) { return s.chords_captured >= 1; } },
-    // ten_chords: chords_captured >= 10
     { id: 'ten_chords', test: function (s) { return s.chords_captured >= 10; } },
-    // long_phrase: longest_session_notes >= 16
     { id: 'long_phrase', test: function (s) { return s.longest_session_notes >= 16; } },
-    // recital: longest_session_notes >= 64
     { id: 'recital', test: function (s) { return s.longest_session_notes >= 64; } }
   ];
 
@@ -72,7 +55,6 @@
     return ids;
   }
 
-  // No hay contadores previos: la página solo guardaba la fuente y la versión del motor.
   function deriveLegacy() {
     var stats = emptyStats();
     return { stats: stats, logros: logrosFor(stats) };

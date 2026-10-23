@@ -1,5 +1,3 @@
-// js/fft.js — FFT radix-2 iterativa + espectro de magnitud con ventana Hann.
-// Pura, sin DOM. UMD: module.exports (Node) + window.FFT (browser).
 'use strict';
 
 (function (root, factory) {
@@ -23,16 +21,11 @@
     return w;
   }
 
-  /**
-   * FFT in-place radix-2 iterativa (Cooley-Tukey, DIT).
-   * re/im: Float64Array de tamaño n (potencia de 2).
-   */
   function transform(re, im) {
     var n = re.length;
     if (n !== im.length || (n & (n - 1)) !== 0 || n < 2) {
       throw new Error('FFT: tamaño debe ser potencia de 2 (n=' + n + ')');
     }
-    // bit reversal
     for (var i = 1, j = 0; i < n; i++) {
       var bit = n >> 1;
       for (; j & bit; bit >>= 1) j ^= bit;
@@ -42,7 +35,6 @@
         var ti = im[i]; im[i] = im[j]; im[j] = ti;
       }
     }
-    // butterflies
     for (var len = 2; len <= n; len <<= 1) {
       var ang = (-2 * Math.PI) / len;
       var wr0 = Math.cos(ang), wi0 = Math.sin(ang);
@@ -64,10 +56,6 @@
     }
   }
 
-  /**
-   * Espectro de magnitud (mitad inferior, N/2 bins) con ventana Hann.
-   * Sin normalización de amplitud: útil para comparar energía relativa.
-   */
   function magnitudeSpectrum(samples) {
     var n = samples.length;
     if ((n & (n - 1)) !== 0) throw new Error('magnitudeSpectrum: n debe ser potencia de 2');
