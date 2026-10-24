@@ -49,7 +49,7 @@ function feed(mod, profile, buf, hops, extra) {
 test('la versión publicada coincide con version.txt y la interfaz es 1', async () => {
   const mod = await engine();
   const file = fs.readFileSync(path.join(__dirname, '..', 'engine', 'v1', 'version.txt'), 'utf8').trim();
-  assert.strictEqual(mod.VERSION, '1.12.6');
+  assert.strictEqual(mod.VERSION, '1.12.7');
   assert.strictEqual(file, mod.VERSION);
   assert.strictEqual(mod.INTERFACE, 1);
   assert.strictEqual(mod.HOP_MS, 20);

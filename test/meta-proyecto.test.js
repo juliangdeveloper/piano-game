@@ -113,3 +113,58 @@ test('fase 7 (Descartada) is accepted', () => {
   const D = Object.assign({}, Meta.PROYECTO, { fase: 7, fase_estado: 4 });
   assert.deepStrictEqual(Meta.metaProyecto(D), D);
 });
+
+test('tipo is optional, independent of fase, and must be a TIPO_PROYECTO value', () => {
+  assert.strictEqual('tipo' in Meta.metaProyecto(Meta.PROYECTO), false);
+  for (const tipo of Object.values(Meta.TIPO_PROYECTO)) {
+    for (const fase of Object.values(Meta.FASE)) {
+      const p = Object.assign({}, Meta.PROYECTO, { fase, tipo });
+      assert.deepStrictEqual(Meta.metaProyecto(p), p);
+    }
+  }
+  for (const tipo of ['', 'Proyecto', 'otro', 1, null, {}, []]) {
+    assert.strictEqual(Meta.metaProyecto(Object.assign({}, Meta.PROYECTO, { tipo })), null);
+  }
+});
+
+test('a stored proyecto with an invalid tipo is tolerated and replaced on the next write', () => {
+  const stale = { objetivo: 'Objetivo anterior.', fase: 2, fase_estado: 3, fases_completadas: 1, tipo: 'no_vale' };
+  const old = {
+    v: 1, slug: 'piano-transcribe', version: '0.0.1', updatedAt: '2026-01-01T00:00:00.000Z',
+    stats: {}, logros: ['first_note'], hitos: { first_note: '2026-01-01T00:00:00.000Z' },
+    proyecto: Object.assign({ extra: 1 }, stale)
+  };
+  const storage = mem({ [KEY]: JSON.stringify(old) });
+  update(storage, []);
+  const rec = JSON.parse(storage.getItem(KEY));
+  assert.deepStrictEqual(rec.proyecto, Object.assign({}, Meta.PROYECTO));
+  assert.strictEqual(rec.hitos['first_note'], '2026-01-01T00:00:00.000Z');
+  assert.strictEqual(storage.getItem(KEY + '.corrupt'), null);
+
+  Meta.metaSetProyecto(Object.assign({}, Meta.PROYECTO, { tipo: 'no_vale' }));
+  const second = mem({ [KEY]: JSON.stringify(old) });
+  update(second, []);
+  assert.strictEqual('proyecto' in JSON.parse(second.getItem(KEY)), false);
+});
+
+test('an old record without tipo gains a valid tipo on the next write and keeps stats and hitos', () => {
+  Meta.metaSetProyecto(Object.assign({}, Meta.PROYECTO, { tipo: Meta.TIPO_PROYECTO.RECURSO }));
+  const stale = { objetivo: 'Objetivo anterior.', fase: 2, fase_estado: 3, fases_completadas: 1 };
+  const old = {
+    v: 1, slug: 'piano-transcribe', version: '0.0.1', updatedAt: '2026-01-01T00:00:00.000Z',
+    stats: { sessions: 7 }, logros: ['first_note'], hitos: { first_note: '2026-01-01T00:00:00.000Z' },
+    proyecto: Object.assign({ extra: 1 }, stale)
+  };
+  const storage = mem({ [KEY]: JSON.stringify(old) });
+  Meta.metaUpdate(SLUG, '9.9.9', { stats: {}, logros: [], declared: [{ key: 'sessions', tipo: Meta.TIPO_STAT.TOTAL_ACUMULADO }] }, ENV(storage));
+  const rec = JSON.parse(storage.getItem(KEY));
+  assert.deepStrictEqual(rec.proyecto, Object.assign({}, Meta.PROYECTO, { tipo: 'recurso' }));
+  assert.strictEqual(rec.hitos['first_note'], '2026-01-01T00:00:00.000Z');
+  assert.strictEqual(storage.getItem(KEY + '.corrupt'), null);
+  assert.strictEqual(rec.stats.sessions, 7);
+
+  Meta.metaSetProyecto({ fase: 9 });
+  const second = mem({ [KEY]: JSON.stringify(old) });
+  update(second, []);
+  assert.strictEqual('proyecto' in JSON.parse(second.getItem(KEY)), false);
+});
