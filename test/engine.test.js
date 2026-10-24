@@ -49,7 +49,7 @@ function feed(mod, profile, buf, hops, extra) {
 test('la versión publicada coincide con version.txt y la interfaz es 1', async () => {
   const mod = await engine();
   const file = fs.readFileSync(path.join(__dirname, '..', 'engine', 'v1', 'version.txt'), 'utf8').trim();
-  assert.strictEqual(mod.VERSION, '1.12.8');
+  assert.strictEqual(mod.VERSION, '1.12.9');
   assert.strictEqual(file, mod.VERSION);
   assert.strictEqual(mod.INTERFACE, 1);
   assert.strictEqual(mod.HOP_MS, 20);
@@ -224,6 +224,20 @@ test('cuantiza a ♩=80: negra, silencio, acorde, compás y 8vb', async () => {
   assert.strictEqual(c2.pitch, 'C2');
   assert.strictEqual(c2.octave, 2);
   assert.strictEqual(c2.ottava, '8vb');
+  assert.deepStrictEqual(c2.ottavas, ['8vb']);
+
+  const mixed = mod.createCapture({ profile: 'score', score: { bpm: 80 } });
+  mixed.press(36, 'midi', 0);
+  mixed.press(64, 'midi', 5);
+  mixed.press(67, 'midi', 10);
+  mixed.release(36, 'midi', 750);
+  mixed.release(64, 'midi', 750);
+  mixed.release(67, 'midi', 750);
+  const ch = mixed.score().measures[0].notes.filter(function (n) { return !n.rest; })[0];
+  assert.deepStrictEqual(ch.midis, [36, 64, 67]);
+  assert.deepStrictEqual(ch.ottavas, ['8vb', null, null]);
+  assert.strictEqual(ch.ottava, '8vb');
+  assert.deepStrictEqual(ch.voices.map(function (v) { return v.ottava; }), ['8vb', null, null]);
 });
 
 test('mensajes de micrófono y sesión de audio', async () => {
