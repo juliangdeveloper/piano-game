@@ -22,7 +22,8 @@
     objetivo: 'Motor de notas open source para mis apps y app web pública de transcripción de piano en vivo.',
     fase: FASE.DISENO,
     fase_estado: ESTADO_FASE.EN_CURSO,
-    fases_completadas: 2
+    fases_completadas: 2,
+    tipo: TIPO_PROYECTO.RECURSO
   };
 
   var proyectoSource = PROYECTO;
