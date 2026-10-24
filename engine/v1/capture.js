@@ -151,7 +151,7 @@ function clarifyThresholdForMidi(midi, opts) {
 }
 
 var INTERFACE = 1;
-var VERSION = '1.12.8';
+var VERSION = '1.12.9';
 var HOP_MS = 20;
 
 var MIN_RUN = 2;
@@ -567,6 +567,7 @@ function noteItem(group, q) {
   var notes = [];
   var octaves = [];
   var accidentals = [];
+  var ottavas = [];
   var ottava = null;
   var i;
   for (i = 0; i < group.events.length; i++) {
@@ -577,11 +578,12 @@ function noteItem(group, q) {
     notes.push(sp.note);
     octaves.push(sp.octave);
     accidentals.push(sp.note.charAt(1) === '#' ? '#' : null);
+    ottavas.push(sp.midi < MIDI_8VB_BELOW ? '8vb' : null);
     if (sp.midi < MIDI_8VB_BELOW) ottava = '8vb';
   }
   var voices = [];
   for (i = 0; i < midis.length; i++) {
-    voices.push({ pitch: pitches[i], note: notes[i], octave: octaves[i], midi: midis[i] });
+    voices.push({ pitch: pitches[i], note: notes[i], octave: octaves[i], midi: midis[i], ottava: ottavas[i] });
   }
   return {
     rest: false,
@@ -597,6 +599,7 @@ function noteItem(group, q) {
     octaves: octaves,
     accidentals: accidentals,
     ottava: ottava,
+    ottavas: ottavas,
     voices: voices
   };
 }
@@ -616,6 +619,7 @@ function restItem(q) {
     octaves: [],
     accidentals: [],
     ottava: null,
+    ottavas: [],
     voices: []
   };
 }

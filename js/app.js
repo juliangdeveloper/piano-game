@@ -3,12 +3,13 @@
 
   var ENGINE_ROOT = 'https://juliangdeveloper.github.io/piano-transcribe/engine/v1/';
   var ENGINE_KEY = 'piano-transcribe.engine';
-  var APP_VERSION = '1.12.8';
+  var APP_VERSION = '1.12.9';
   var SCORE = { bpm: 80, timeSig: '4/4', clef: 'treble' };
   var LATIN = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
   var NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   var LS_KEY = 'piano-transcribe.source';
   var LS_KEY_OLD = 'piano-game.source';
+  var MUSIC_FONT = Object.freeze({ FAMILY: 'Gonville', URL: 'fonts/gonville.woff2' });
 
   var elBtn = document.getElementById('btnToggle');
   var elNote = document.getElementById('noteDisplay');
@@ -42,6 +43,7 @@
   var teleAt = 0;
   var silentTicks = 0;
   var progress = null;
+  var fontReady = false;
 
   function loadPianoEngine(root) {
     return fetch(root + 'version.txt?t=' + Date.now(), { cache: 'no-store' })
@@ -373,156 +375,17 @@
     drawStaff();
   }
 
-  function spellKey(midi, ottava) {
-    var m = midi;
-    if (ottava === '8vb') m += 12;
-    var pcs = ['c', 'c#', 'd', 'd#', 'e', 'f', 'f#', 'g', 'g#', 'a', 'a#', 'b'];
-    var pc = ((m % 12) + 12) % 12;
-    var name = pcs[pc];
-    var oct = Math.floor(m / 12) - 1;
-    return { key: name + '/' + oct, accidental: name.length > 1 ? '#' : null };
-  }
-
-  function restDuration(dur) {
-    if (!dur) return 'qr';
-    if (dur.charAt(dur.length - 1) === 'r') return dur;
-    return dur + 'r';
-  }
-
-  function measureMidis(measure) {
-    var out = [];
-    var src = (measure && measure.notes) ? measure.notes : [];
-    var i;
-    var k;
-    for (i = 0; i < src.length; i++) {
-      var n = src[i];
-      var midis = (n.midis && n.midis.length) ? n.midis : (n.midi != null ? [n.midi] : []);
-      for (k = 0; k < midis.length; k++) out.push(midis[k]);
-    }
-    return out;
-  }
-
-  function staffKind(midis) {
-    var low = false;
-    var high = false;
-    var i;
-    for (i = 0; i < midis.length; i++) {
-      if (midis[i] < 60) low = true;
-      else high = true;
-    }
-    if (low && high) return 'grand';
-    if (low) return 'bass';
-    return 'treble';
-  }
-
-  function staveNotesFromMeasure(VF, measure, clef, band) {
-    var notes = [];
-    var src = (measure && measure.notes) ? measure.notes : [];
-    if (!src.length) {
-      notes.push(new VF.StaveNote({ clef: clef || 'treble', keys: ['b/4'], duration: 'wr' }));
-      return notes;
-    }
-    var i;
-    for (i = 0; i < src.length; i++) {
-      var n = src[i];
-      var keys = [];
-      var acc = [];
-      var sounding = !(n.rest || n.midi == null);
-      if (sounding) {
-        var midis = (n.midis && n.midis.length) ? n.midis.slice() : [n.midi];
-        midis.sort(function (a, b) { return a - b; });
-        var k;
-        for (k = 0; k < midis.length; k++) {
-          if (band === 'low' && midis[k] >= 60) continue;
-          if (band === 'high' && midis[k] < 60) continue;
-          var sp = spellKey(midis[k], clef === 'treble' ? n.ottava : null);
-          keys.push(sp.key);
-          acc.push(sp.accidental);
-        }
-      }
-      var isRest = !keys.length;
-      var sn = new VF.StaveNote({
-        clef: clef || 'treble',
-        keys: isRest ? ['b/4'] : keys,
-        duration: isRest ? restDuration(n.duration) : n.duration
-      });
-      if (!isRest) {
-        var a;
-        for (a = 0; a < acc.length; a++) {
-          if (acc[a]) sn.addModifier(new VF.Accidental(acc[a]), a);
-        }
-        if (clef === 'treble' && n.ottava === '8vb') {
-          var ann = new VF.Annotation('8vb');
-          ann.setFont('sans-serif', 10, 'italic');
-          ann.setVerticalJustification(VF.Annotation.VerticalJustify.TOP);
-          sn.addModifier(ann);
-        }
-      }
-      notes.push(sn);
-    }
-    return notes;
-  }
-
   function drawStaff() {
-    if (!elStaff) return;
-    var VF = window.Vex && window.Vex.Flow;
-    if (!VF) return;
+    if (!elStaff || !fontReady) return;
+    var VF = window.VexFlow;
+    if (!VF || !window.Staff) return;
     var data = (session && typeof session.score === 'function')
       ? session.score()
       : { clef: 'treble', timeSigStr: '4/4', measures: [{ notes: [] }] };
-    var nMeas = Math.max(1, data.measures.length);
     var innerW = (elStaffWrap && elStaffWrap.clientWidth) ? elStaffWrap.clientWidth : 358;
-    var staveW = Math.max(260, innerW - 12);
-    var kinds = [];
-    var m;
-    var height = 24;
-    for (m = 0; m < nMeas; m++) {
-      kinds[m] = staffKind(measureMidis(data.measures[m]));
-      height += kinds[m] === 'grand' ? 250 : 148;
-    }
-    var width = staveW + 10;
     elStaff.innerHTML = '';
     try {
-      var renderer = new VF.Renderer(elStaff, VF.Renderer.Backends.SVG);
-      renderer.resize(width, height);
-      var context = renderer.getContext();
-      var y = 18;
-      for (m = 0; m < nMeas; m++) {
-        var kind = kinds[m];
-        var inner = staveW - (m === 0 ? 90 : 56);
-        if (inner < 80) inner = 80;
-        if (kind === 'grand') {
-          var treble = new VF.Stave(4, y, staveW);
-          var bass = new VF.Stave(4, y + 108, staveW);
-          if (m === 0) treble.addClef('treble').addTimeSignature(data.timeSigStr || '4/4');
-          else treble.addClef('treble');
-          bass.addClef('bass');
-          treble.setContext(context).draw();
-          bass.setContext(context).draw();
-          var high = new VF.Voice({ numBeats: 4, beatValue: 4 });
-          var low = new VF.Voice({ numBeats: 4, beatValue: 4 });
-          high.setMode(VF.Voice.Mode.SOFT);
-          low.setMode(VF.Voice.Mode.SOFT);
-          high.addTickables(staveNotesFromMeasure(VF, data.measures[m], 'treble', 'high'));
-          low.addTickables(staveNotesFromMeasure(VF, data.measures[m], 'bass', 'low'));
-          new VF.Formatter().joinVoices([high, low]).format([high, low], inner);
-          high.draw(context, treble);
-          low.draw(context, bass);
-          y += 250;
-        } else {
-          var clef = kind === 'bass' ? 'bass' : (data.clef || 'treble');
-          var stave = new VF.Stave(4, y, staveW);
-          if (m === 0) stave.addClef(clef).addTimeSignature(data.timeSigStr || '4/4');
-          else stave.addClef(clef);
-          stave.setContext(context).draw();
-          var voice = new VF.Voice({ numBeats: 4, beatValue: 4 });
-          voice.setMode(VF.Voice.Mode.SOFT);
-          voice.addTickables(staveNotesFromMeasure(VF, data.measures[m], clef, 'all'));
-          new VF.Formatter().joinVoices([voice]).format([voice], inner);
-          voice.draw(context, stave);
-          y += 148;
-        }
-      }
+      window.Staff.draw(VF, elStaff, data, innerW);
     } catch (err) {}
     if (elStaffWrap) elStaffWrap.scrollTop = elStaffWrap.scrollHeight;
   }
@@ -584,11 +447,17 @@
     if (!document.hidden) updateBadge();
   });
 
-  try {
-    if (window.Vex && window.Vex.Flow && typeof window.Vex.Flow.setMusicFont === 'function') {
-      window.Vex.Flow.setMusicFont('Gonville');
-    }
-  } catch (eFont) {}
+  function loadMusicFont() {
+    if (!window.VexFlow || typeof window.FontFace !== 'function' || !document.fonts) return;
+    window.VexFlow.setFonts(MUSIC_FONT.FAMILY);
+    new FontFace(MUSIC_FONT.FAMILY, 'url(' + MUSIC_FONT.URL + '?v=' + APP_VERSION + ')', { display: 'block' }).load().then(function (face) {
+      document.fonts.add(face);
+      fontReady = true;
+      drawStaff();
+    }, function () {});
+  }
+
+  try { loadMusicFont(); } catch (eFont) {}
 
   if (window.Progress && typeof window.Progress.createTracker === 'function') {
     progress = window.Progress.createTracker({ version: APP_VERSION });
